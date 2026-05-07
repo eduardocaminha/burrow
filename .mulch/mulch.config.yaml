@@ -13,6 +13,8 @@ domains:
   git: {}
   runtime: {}
   inbox: {}
+  events: {}
+  archive: {}
 governance:
   max_entries: 100
   warn_entries: 150
