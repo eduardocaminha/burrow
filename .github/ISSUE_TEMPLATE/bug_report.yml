@@ -1,0 +1,65 @@
+name: Bug Report
+description: Report a bug in burrow
+labels: ["bug"]
+body:
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do?
+      placeholder: |
+        1. Run `bw up`
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened?
+    validations:
+      required: true
+
+  - type: input
+    id: burrow-version
+    attributes:
+      label: burrow version
+      description: Output of `bw --version`
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: bun-version
+    attributes:
+      label: Bun version
+      description: Output of `bun --version`
+      placeholder: "1.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "macOS 15, Ubuntu 22.04, etc."
+    validations:
+      required: true
+
+  - type: input
+    id: sandbox
+    attributes:
+      label: Sandbox runtime
+      description: Which sandbox primitive is in use?
+      placeholder: "bwrap (Linux), sandbox-exec (macOS), none"
+    validations:
+      required: false
