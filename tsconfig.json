@@ -9,6 +9,7 @@
 		"isolatedModules": true,
 		"allowImportingTsExtensions": true,
 		"noEmit": true,
+		"skipLibCheck": true,
 		"types": ["bun-types"]
 	},
 	"include": ["src/**/*", "scripts/**/*"]
