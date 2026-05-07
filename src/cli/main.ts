@@ -14,6 +14,8 @@
 
 import { Command } from "commander";
 import {
+	AgentNotInstalled,
+	AgentRuntimeError,
 	BurrowError,
 	formatError,
 	NotFoundError,
@@ -41,6 +43,12 @@ import { renderForkResult, runForkCommand } from "./commands/fork.ts";
 import { renderInitResult, runInitCommand } from "./commands/init.ts";
 import { type ListCommandOptions, renderListTable, runListCommand } from "./commands/list.ts";
 import { type LogsCommandOptions, runLogsCommand } from "./commands/logs.ts";
+import {
+	type PromptCommandInput,
+	type PromptCommandOptions,
+	renderPromptResult,
+	runPromptCommand,
+} from "./commands/prompt.ts";
 import {
 	parsePriority,
 	renderSendResult,
@@ -284,6 +292,62 @@ program
 					process.stdout.write(`${renderDestroyResult(result)}\n`);
 				}
 				if (result.outcomes.some((o) => !o.ok)) process.exit(1);
+			});
+		},
+	);
+
+program
+	.command("prompt")
+	.description("dispatch a registered agent against a burrow and stream events")
+	.argument("<id>", "burrow id")
+	.argument("<message>", "prompt body")
+	.option("--agent <id>", "override the burrow.toml [[agents]] default")
+	.option("--metadata <kv...>", "k=v pairs to attach to the run row (repeatable)")
+	.option("--no-stream", "skip writing events to stdout (still persists everything)")
+	.option("--json", "force NDJSON event output (default when not a TTY)")
+	.action(
+		async (id: string, message: string, opts: PromptCommandOptions & { stream?: boolean }) => {
+			await withClient(async (client) => {
+				const ac = makeAbortController();
+				try {
+					const promptOpts: PromptCommandOptions = {};
+					if (opts.agent !== undefined) promptOpts.agent = opts.agent;
+					if (opts.metadata !== undefined) promptOpts.metadata = opts.metadata;
+					if (opts.json !== undefined) promptOpts.json = opts.json;
+					if (opts.stream === false) promptOpts.noStream = true;
+					const input: PromptCommandInput = {
+						client,
+						burrowId: id,
+						prompt: message,
+						options: promptOpts,
+						stdout: process.stdout,
+						signal: ac.controller.signal,
+						isTty: Boolean(process.stdout.isTTY),
+					};
+					const result = await runPromptCommand(input);
+					if (opts.json) {
+						process.stdout.write(
+							`${JSON.stringify(
+								{
+									run: result.run,
+									agentId: result.agentId,
+									state: result.state,
+									exitCode: result.exitCode,
+									eventsPersisted: result.eventsPersisted,
+									messagesDelivered: result.messagesDelivered,
+								},
+								null,
+								2,
+							)}\n`,
+						);
+					} else {
+						process.stdout.write(`${renderPromptResult(result)}\n`);
+					}
+					if (result.state === "failed") process.exit(4);
+					if (result.state === "cancelled") process.exit(1);
+				} finally {
+					ac.dispose();
+				}
 			});
 		},
 	);
@@ -543,6 +607,8 @@ function exitCodeFor(err: unknown): number {
 	if (err instanceof ValidationError) return 3;
 	if (err instanceof NotFoundError) return 2;
 	if (err instanceof SandboxError) return 4;
+	if (err instanceof AgentNotInstalled) return 4;
+	if (err instanceof AgentRuntimeError) return 4;
 	if (err instanceof BurrowError) return 1;
 	return 1;
 }
