@@ -17,3 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `attach`, `list`, `show`, `stop`, `destroy`, and `agents list/show/validate`;
   shared style helpers in `src/cli/style.ts` (status icons, TTY-aware color);
   exit codes per SPEC §16 (3 = invalid input, 2 = not found, 4 = sandbox).
+- Phase 8 — `burrow.toml` schema (Zod over smol-toml) covering `[project]`,
+  `[sandbox]`, `[toolchain]`, `[env]`, `[secrets]`, `[git]`, `[hooks]`, and
+  `[[agents]]`; per-project loader (`src/config/burrow-toml-loader.ts`); secret
+  resolution pipeline in `src/secrets/` (env-file store, 1Password `op://`
+  resolver with caching, layered `resolveEnv` orchestrator); host toolchain
+  checker in `src/toolchain/check.ts` (prefix + `>=`/`>`/`=` operator
+  matching); `burrow init` command that scaffolds a starter `burrow.toml`
+  with detected toolchains; `burrow doctor` extended with project-scoped
+  toolchain + 1Password CLI checks (`--project <root>`, `--no-project`);
+  `burrow up` now loads `burrow.toml`, gates on `assertDoctorOk`, and folds
+  `[sandbox]`/`[env]`/`[secrets]` into the persisted `SandboxProfile`.

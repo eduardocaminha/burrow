@@ -1,18 +1,22 @@
 /**
  * `burrow up` — create + start a project burrow (SPEC §16, §11).
  *
- * V1 minimum (Phase 7): materialize a workspace via `git worktree`/clone,
- * persist a burrow row, return it. Toolchain doctoring + burrow.toml secrets
- * land in Phase 8; for now the user passes flags directly or accepts defaults
- * (no network, ssh-agent passthrough off, no toolchain mounts).
+ * Phase 8 wiring: load `burrow.toml` from the project root, run `burrow
+ * doctor` (toolchain + sandbox + op CLI), resolve `[env]` + `[secrets]` into
+ * `SandboxProfile.setEnv`, and lift `[sandbox]` directives onto the profile.
  *
  * The burrow row stores enough state for later phases to pick it up:
  *   - `providerStateJson.workspaceSource` so destroy can remove the worktree.
  *   - `profileJson` so the runner can rebuild the sandbox profile per turn.
+ *
+ * Doctor failures throw `ValidationError`; the user runs `burrow doctor` to
+ * see the per-row breakdown. CLI flag overrides win over `burrow.toml`, which
+ * wins over built-in defaults (SPEC §17.1).
  */
 
 import { mkdir } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
+import { loadBurrowToml } from "../../config/burrow-toml-loader.ts";
 import { ValidationError } from "../../core/errors.ts";
 import { generateId } from "../../core/ids.ts";
 import type { Burrow, BurrowKind } from "../../core/types.ts";
@@ -23,6 +27,11 @@ import {
 	materializeProjectWorkspace,
 } from "../../provider/local/workspace.ts";
 import type { NetworkPolicy, SandboxProfile } from "../../provider/types.ts";
+import type { BurrowToml } from "../../schemas/burrow-toml.ts";
+import { resolveEnv } from "../../secrets/env.ts";
+import type { OpResolver } from "../../secrets/op.ts";
+import { loadSecretStore } from "../../secrets/store.ts";
+import { assertDoctorOk, runDoctor } from "./doctor.ts";
 
 const DEFAULT_BRANCH_PREFIX = "burrow";
 const NETWORK_POLICIES: readonly NetworkPolicy[] = ["none", "restricted", "open"];
@@ -45,11 +54,28 @@ export interface UpCommandInput {
 	materializer?: (opts: MaterializeProjectOptions) => Promise<MaterializedWorkspace>;
 	/** Override the projects base directory. Defaults to `client.paths.projectsDir`. */
 	projectsDir?: string;
+	/**
+	 * Inject an OpResolver. Tests pass a fake; the CLI defaults to the real
+	 * `op read` shell-out.
+	 */
+	opResolver?: OpResolver;
+	/** Skip the embedded `burrow doctor` call (tests). */
+	skipDoctor?: boolean;
+	/** Inject a doctor runner (tests). */
+	doctorRunner?: typeof runDoctor;
+	/** Host environment for [env] required/optional resolution. Defaults to process.env. */
+	hostEnv?: Record<string, string | undefined>;
+	/** CLI overrides that win over [env].defaults / [secrets] / store / host. */
+	envOverrides?: Record<string, string>;
 }
 
 export interface UpCommandResult {
 	burrow: Burrow;
 	workspace: MaterializedWorkspace;
+	/** Loaded burrow.toml (null when none was present in the project). */
+	burrowToml: BurrowToml | null;
+	/** Resolved env vars baked into the sandbox profile. */
+	resolvedEnv: Record<string, string>;
 }
 
 export function parseNetworkPolicy(raw: string | undefined): NetworkPolicy {
@@ -64,10 +90,40 @@ export function parseNetworkPolicy(raw: string | undefined): NetworkPolicy {
 
 export async function runUpCommand(input: UpCommandInput): Promise<UpCommandResult> {
 	const projectRoot = resolve(input.projectRoot);
-	const network = parseNetworkPolicy(input.options.network);
 	const provider = input.options.provider ?? "local";
 
-	// Generate the burrow id up front so the workspace path can include it.
+	// 1. Load burrow.toml (parse errors throw ValidationError).
+	const loaded = await loadBurrowToml(projectRoot);
+	const burrowToml = loaded?.config ?? null;
+
+	// 2. Resolve `[sandbox]` + flag overrides into the network policy. CLI flag
+	// wins over burrow.toml which wins over the "none" default (SPEC §17.1).
+	const network = resolveNetworkPolicy(input.options.network, burrowToml);
+
+	// 3. Run the doctor before any side effects so a missing toolchain refuses
+	// `up` rather than orphaning a worktree (SPEC §19).
+	if (input.skipDoctor !== true) {
+		const doctor = input.doctorRunner ?? runDoctor;
+		const report = await doctor({ projectRoot });
+		assertDoctorOk(report);
+	}
+
+	// 4. Resolve env + secrets.
+	const projectId = burrowToml?.project?.name ?? basename(projectRoot);
+	const store = await loadSecretStore({
+		secretsDir: input.client.paths.secretsDir,
+		projectId,
+	});
+	const envInput: Parameters<typeof resolveEnv>[0] = {
+		config: burrowToml,
+		secretsStore: store.merged,
+		hostEnv: input.hostEnv ?? process.env,
+	};
+	if (input.envOverrides) envInput.overrides = input.envOverrides;
+	if (input.opResolver) envInput.op = input.opResolver;
+	const envResult = await resolveEnv(envInput);
+
+	// 5. Generate the burrow id up front so the workspace path can include it.
 	// The id is supplied to BurrowsRepo.create below so insert + workspace
 	// dir share the same identifier.
 	const burrowId = generateId("burrow");
@@ -83,21 +139,31 @@ export async function runUpCommand(input: UpCommandInput): Promise<UpCommandResu
 		workspacePath,
 		branch,
 		createBranch: true,
-		baseBranch: input.options.baseBranch ?? "main",
+		baseBranch: input.options.baseBranch ?? burrowToml?.project?.default_branch ?? "main",
 		projectRoot,
 	};
-	if (input.options.originUrl !== undefined) matOpts.originUrl = input.options.originUrl;
+	if (input.options.originUrl !== undefined) {
+		matOpts.originUrl = input.options.originUrl;
+	} else if (burrowToml?.project?.origin) {
+		matOpts.originUrl = burrowToml.project.origin;
+	}
 	const workspace = await materializer(matOpts);
 
 	const profile: SandboxProfile = {
 		workspace: workspace.workspacePath,
 		readOnlyMounts: [],
 		network,
-		allowedDomains: [],
+		allowedDomains: burrowToml?.sandbox?.allowed_domains ?? [],
 		envPassthrough: [],
-		setEnv: {},
+		setEnv: envResult.values,
 		toolchainPaths: [],
 	};
+	const timeoutMinutes = burrowToml?.sandbox?.timeout_minutes;
+	if (timeoutMinutes !== undefined) profile.timeoutMs = timeoutMinutes * 60_000;
+	const memMb = burrowToml?.sandbox?.memory_limit_mb;
+	if (memMb !== undefined) profile.memoryLimitMb = memMb;
+	const cpu = burrowToml?.sandbox?.cpu_limit;
+	if (cpu !== undefined) profile.cpuLimit = cpu;
 
 	const providerState = {
 		workspaceSource: workspace.source,
@@ -107,7 +173,7 @@ export async function runUpCommand(input: UpCommandInput): Promise<UpCommandResu
 	const burrow = input.client.repos.burrows.create({
 		id: burrowId,
 		kind: "project" satisfies BurrowKind,
-		name: input.options.name ?? null,
+		name: input.options.name ?? burrowToml?.project?.name ?? null,
 		projectRoot,
 		workspacePath: workspace.workspacePath,
 		branch,
@@ -116,7 +182,13 @@ export async function runUpCommand(input: UpCommandInput): Promise<UpCommandResu
 		profile,
 	});
 
-	return { burrow, workspace };
+	return { burrow, workspace, burrowToml, resolvedEnv: envResult.values };
+}
+
+function resolveNetworkPolicy(flag: string | undefined, config: BurrowToml | null): NetworkPolicy {
+	if (flag !== undefined) return parseNetworkPolicy(flag);
+	if (config?.sandbox?.network) return config.sandbox.network;
+	return "none";
 }
 
 export function renderUpResult(result: UpCommandResult): string {

@@ -37,6 +37,7 @@ import { renderDestroyResult, runDestroyCommand } from "./commands/destroy.ts";
 import { renderDoctorReport, runDoctor } from "./commands/doctor.ts";
 import { type EventsCommandOptions, runEventsCommand } from "./commands/events.ts";
 import { renderForkResult, runForkCommand } from "./commands/fork.ts";
+import { renderInitResult, runInitCommand } from "./commands/init.ts";
 import { type ListCommandOptions, renderListTable, runListCommand } from "./commands/list.ts";
 import { type LogsCommandOptions, runLogsCommand } from "./commands/logs.ts";
 import {
@@ -63,16 +64,44 @@ program
 
 program
 	.command("doctor")
-	.description("check host environment for required sandbox primitives")
+	.description("check host environment, burrow.toml, and declared toolchains")
+	.option("--project <root>", "project root to load burrow.toml from (defaults to cwd)")
+	.option("--no-project", "skip project-scoped checks (host-only doctor)")
 	.option("--json", "emit machine-readable JSON")
-	.action(async (opts: { json?: boolean }) => {
-		const report = await runDoctor();
+	.action(async (opts: { project?: string; noProject?: boolean; json?: boolean }) => {
+		const runOpts: Parameters<typeof runDoctor>[0] = {};
+		const wantsProject = opts.project !== undefined || opts.noProject !== true;
+		if (wantsProject) runOpts.projectRoot = opts.project ?? process.cwd();
+		const report = await runDoctor(runOpts);
 		if (opts.json) {
 			process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 		} else {
 			process.stdout.write(`${renderDoctorReport(report)}\n`);
 		}
 		process.exit(report.ok ? 0 : 1);
+	});
+
+program
+	.command("init")
+	.description("scaffold a burrow.toml in the current project")
+	.option("--name <name>", "override [project].name (defaults to dirname)")
+	.option("--force", "overwrite an existing burrow.toml")
+	.option("--dry-run", "print the rendered file without writing")
+	.option("--json", "emit machine-readable JSON")
+	.action(async (opts: { name?: string; force?: boolean; dryRun?: boolean; json?: boolean }) => {
+		const initOpts: Parameters<typeof runInitCommand>[0] = { projectRoot: process.cwd() };
+		if (opts.name !== undefined) initOpts.name = opts.name;
+		if (opts.force !== undefined) initOpts.force = opts.force;
+		if (opts.dryRun !== undefined) initOpts.dryRun = opts.dryRun;
+		const result = await runInitCommand(initOpts);
+		if (opts.json) {
+			process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+		} else {
+			process.stdout.write(`${renderInitResult(result)}\n`);
+			if (opts.dryRun) {
+				process.stdout.write(`\n--- ${result.source} ---\n${result.contents}`);
+			}
+		}
 	});
 
 program

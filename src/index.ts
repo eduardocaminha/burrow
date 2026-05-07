@@ -7,6 +7,11 @@
 
 export const VERSION = "0.0.0";
 
+export {
+	BURROW_TOML_FILENAME,
+	type LoadedBurrowToml,
+	loadBurrowToml,
+} from "./config/burrow-toml-loader.ts";
 export { type BurrowPaths, resolvePaths } from "./config/paths.ts";
 export {
 	AgentNotInstalled,
@@ -213,3 +218,58 @@ export {
 	type AgentPromptDelivery,
 	parseAgentConfig,
 } from "./schemas/agent-config.ts";
+export {
+	type BurrowToml,
+	type BurrowTomlAgent,
+	type BurrowTomlGitCredentials,
+	type BurrowTomlGitIdentity,
+	type BurrowTomlNetworkPolicy,
+	type BurrowTomlParseError,
+	type BurrowTomlParseResult,
+	BurrowTomlSchema,
+	type BurrowTomlToolchainMode,
+	type BurrowTomlToolchainSpec,
+	GIT_CREDENTIAL_KINDS,
+	GIT_IDENTITY_KINDS,
+	NETWORK_POLICIES,
+	normalizeToolchainSpec,
+	parseBurrowToml,
+	parseBurrowTomlOrThrow,
+	TOOLCHAIN_MODES,
+} from "./schemas/burrow-toml.ts";
+export {
+	type ResolveEnvInput,
+	type ResolveEnvResult,
+	resolveEnv,
+} from "./secrets/env.ts";
+export {
+	defaultOpRead,
+	OP_PROTOCOL,
+	type OpReadFn,
+	type OpReadInput,
+	type OpReadResult,
+	OpResolver,
+	type OpResolverOptions,
+} from "./secrets/op.ts";
+export {
+	GLOBAL_ENV_FILENAME,
+	type LoadedSecretFile,
+	loadSecretStore,
+	parseDotenv,
+	readEnvFile,
+	type SecretStoreOptions,
+	type SecretStoreResult,
+} from "./secrets/store.ts";
+export {
+	type CheckToolchainsInput,
+	checkToolchains,
+	compareSemver,
+	defaultToolchainProbe,
+	extractVersionToken,
+	type ToolchainCheckResult,
+	type ToolchainCheckSummary,
+	type ToolchainProbe,
+	type ToolchainProbeResult,
+	type ToolchainStatus,
+	versionMatches,
+} from "./toolchain/check.ts";
