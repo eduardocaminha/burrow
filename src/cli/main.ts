@@ -31,6 +31,7 @@ import {
 	runAgentsList,
 	runAgentValidate,
 } from "./commands/agents.ts";
+import { renderAgentsAddResult, runAgentsAdd } from "./commands/agents-add.ts";
 import { renderAttachResult, runAttachCommand } from "./commands/attach.ts";
 import { type ChatCommandOptions, lineIterator, runChatCommand } from "./commands/chat.ts";
 import { renderDestroyResult, runDestroyCommand } from "./commands/destroy.ts";
@@ -83,26 +84,35 @@ program
 
 program
 	.command("init")
-	.description("scaffold a burrow.toml in the current project")
+	.description(
+		"scaffold a burrow.toml in the current project (pass agent ids as positional args, e.g. `bw init claude`)",
+	)
+	.argument("[agents...]", "agent ids or aliases (claude, sapling, codex, ...) to pre-declare")
 	.option("--name <name>", "override [project].name (defaults to dirname)")
 	.option("--force", "overwrite an existing burrow.toml")
 	.option("--dry-run", "print the rendered file without writing")
 	.option("--json", "emit machine-readable JSON")
-	.action(async (opts: { name?: string; force?: boolean; dryRun?: boolean; json?: boolean }) => {
-		const initOpts: Parameters<typeof runInitCommand>[0] = { projectRoot: process.cwd() };
-		if (opts.name !== undefined) initOpts.name = opts.name;
-		if (opts.force !== undefined) initOpts.force = opts.force;
-		if (opts.dryRun !== undefined) initOpts.dryRun = opts.dryRun;
-		const result = await runInitCommand(initOpts);
-		if (opts.json) {
-			process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-		} else {
-			process.stdout.write(`${renderInitResult(result)}\n`);
-			if (opts.dryRun) {
-				process.stdout.write(`\n--- ${result.source} ---\n${result.contents}`);
+	.action(
+		async (
+			agents: string[],
+			opts: { name?: string; force?: boolean; dryRun?: boolean; json?: boolean },
+		) => {
+			const initOpts: Parameters<typeof runInitCommand>[0] = { projectRoot: process.cwd() };
+			if (opts.name !== undefined) initOpts.name = opts.name;
+			if (opts.force !== undefined) initOpts.force = opts.force;
+			if (opts.dryRun !== undefined) initOpts.dryRun = opts.dryRun;
+			if (agents.length > 0) initOpts.agents = agents;
+			const result = await runInitCommand(initOpts);
+			if (opts.json) {
+				process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+			} else {
+				process.stdout.write(`${renderInitResult(result)}\n`);
+				if (opts.dryRun) {
+					process.stdout.write(`\n--- ${result.source} ---\n${result.contents}`);
+				}
 			}
-		}
-	});
+		},
+	);
 
 program
 	.command("up")
@@ -434,6 +444,24 @@ agents
 			process.stdout.write(`${renderAgentValidate(result)}\n`);
 		}
 		if (!result.ok) process.exit(3);
+	});
+
+agents
+	.command("add")
+	.description("append [[agents]] stanzas to burrow.toml (built-in id or alias)")
+	.argument("<id...>", "agent ids or aliases — e.g. `claude`, `sapling`, `codex`")
+	.option("--project <root>", "project root (defaults to cwd)")
+	.option("--json", "emit machine-readable JSON")
+	.action(async (ids: string[], opts: { project?: string; json?: boolean }) => {
+		const result = await runAgentsAdd({
+			tokens: ids,
+			projectRoot: opts.project ?? process.cwd(),
+		});
+		if (opts.json) {
+			process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+		} else {
+			process.stdout.write(`${renderAgentsAddResult(result)}\n`);
+		}
 	});
 
 program

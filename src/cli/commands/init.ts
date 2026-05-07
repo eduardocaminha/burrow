@@ -6,6 +6,10 @@
  * range. The user is expected to review and commit; we deliberately err on
  * the side of "small but useful" — missing toolchains are fine to add later.
  *
+ * Positional agent args (e.g. `bw init claude`) bake `[[agents]]` stanzas
+ * into the file so the project is ready to run that runtime out of the box.
+ * Aliases collapse via `resolveAgentAlias`; unknown tokens fail loudly.
+ *
  * Refuses to overwrite an existing `burrow.toml` unless `--force` is set.
  */
 
@@ -14,6 +18,8 @@ import { writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { BURROW_TOML_FILENAME, loadBurrowToml } from "../../config/burrow-toml-loader.ts";
 import { ValidationError } from "../../core/errors.ts";
+import { knownBuiltInIds, resolveAgentAlias } from "../../runtime/aliases.ts";
+import { renderAgentStanza } from "./agents-add.ts";
 
 export interface InitCommandOptions {
 	/** Project root. Defaults to process.cwd(). */
@@ -24,6 +30,12 @@ export interface InitCommandOptions {
 	force?: boolean;
 	/** Render but don't write — surfaces the contents on stdout. */
 	dryRun?: boolean;
+	/**
+	 * Agents (aliases or canonical ids) to bake into the scaffolded file.
+	 * Each becomes an `[[agents]]` stanza. Unknown tokens throw
+	 * `ValidationError` before any file is written.
+	 */
+	agents?: string[];
 }
 
 export interface InitCommandResult {
@@ -31,6 +43,8 @@ export interface InitCommandResult {
 	contents: string;
 	written: boolean;
 	detected: DetectedToolchains;
+	/** Canonical agent ids that were baked in (after alias resolution). */
+	agents: string[];
 }
 
 interface DetectedToolchains {
@@ -44,24 +58,48 @@ interface DetectedToolchains {
 export async function runInitCommand(opts: InitCommandOptions = {}): Promise<InitCommandResult> {
 	const projectRoot = resolve(opts.projectRoot ?? process.cwd());
 	const target = join(projectRoot, BURROW_TOML_FILENAME);
+
+	// Resolve agent tokens BEFORE the existence check so a typo fails fast,
+	// before we annoy the user with an "already exists" error they then have
+	// to retry to discover the real problem.
+	const agentIds = resolveAgentTokens(opts.agents ?? []);
+
 	if (existsSync(target) && !opts.force && !opts.dryRun) {
 		// Validate it parses — if so, surface a friendly "already exists".
 		await loadBurrowToml(projectRoot);
 		throw new ValidationError(`${target} already exists`, {
-			recoveryHint: "re-run with --force to overwrite, or edit the file directly",
+			recoveryHint:
+				"re-run with --force to overwrite, or run `burrow agents add <id>` to add an agent in place",
 		});
 	}
 
 	const detected = detectToolchains(projectRoot);
 	const projectName = opts.name ?? basename(projectRoot);
-	const contents = renderBurrowToml({ projectName, detected });
+	const contents = renderBurrowToml({ projectName, detected, agentIds });
 
 	if (opts.dryRun) {
-		return { source: target, contents, written: false, detected };
+		return { source: target, contents, written: false, detected, agents: agentIds };
 	}
 
 	await writeFile(target, contents, "utf8");
-	return { source: target, contents, written: true, detected };
+	return { source: target, contents, written: true, detected, agents: agentIds };
+}
+
+function resolveAgentTokens(tokens: string[]): string[] {
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (const token of tokens) {
+		const canonical = resolveAgentAlias(token);
+		if (!canonical) {
+			throw new ValidationError(`unknown agent: '${token}'`, {
+				recoveryHint: `known built-ins: ${knownBuiltInIds().join(", ")}`,
+			});
+		}
+		if (seen.has(canonical)) continue;
+		seen.add(canonical);
+		out.push(canonical);
+	}
+	return out;
 }
 
 function detectToolchains(projectRoot: string): DetectedToolchains {
@@ -91,6 +129,7 @@ function detectsBunInPackageJson(projectRoot: string): boolean {
 interface RenderOptions {
 	projectName: string;
 	detected: DetectedToolchains;
+	agentIds: string[];
 }
 
 function renderBurrowToml(opts: RenderOptions): string {
@@ -137,16 +176,32 @@ function renderBurrowToml(opts: RenderOptions): string {
 		`read_only_main_branch = true     # block pushes to default_branch`,
 		`credentials = "ssh-agent"        # ssh-agent | managed-key | token`,
 		``,
-		`# Add agents that aren't built-in here. Built-in ids: claude-code, sapling, codex.`,
-		`# [[agents]]`,
-		`# id = "my-custom-agent"`,
-		`# displayName = "Custom"`,
-		`# command = "./scripts/agent.sh"`,
-		`# args = ["--prompt", "{{prompt}}"]`,
-		`# outputFormat = "raw-text"`,
-		`# promptDelivery = "arg"`,
-		``,
 	);
+
+	if (opts.agentIds.length > 0) {
+		lines.push(
+			`# Agents declared for this project. Built-ins (claude-code, sapling, codex)`,
+			`# are auto-registered; an explicit entry pins the choice and lets you patch`,
+			`# defaults without forking the runtime.`,
+			``,
+		);
+		for (const id of opts.agentIds) {
+			lines.push(renderAgentStanza(id));
+		}
+	} else {
+		lines.push(
+			`# Add agents that aren't built-in here. Built-in ids: claude-code, sapling, codex.`,
+			`# Run \`burrow agents add <id>\` to append an entry without editing this file.`,
+			`# [[agents]]`,
+			`# id = "my-custom-agent"`,
+			`# displayName = "Custom"`,
+			`# command = "./scripts/agent.sh"`,
+			`# args = ["--prompt", "{{prompt}}"]`,
+			`# outputFormat = "raw-text"`,
+			`# promptDelivery = "arg"`,
+			``,
+		);
+	}
 	return lines.join("\n");
 }
 
@@ -165,6 +220,7 @@ export function renderInitResult(result: InitCommandResult): string {
 	const detected = formatDetected(result.detected);
 	const lines = [head];
 	if (detected.length > 0) lines.push(`  detected toolchains: ${detected.join(", ")}`);
+	if (result.agents.length > 0) lines.push(`  agents: ${result.agents.join(", ")}`);
 	if (result.written) {
 		lines.push(``, `Next: review the file, commit it, then run \`burrow doctor\`.`);
 	}
