@@ -90,6 +90,70 @@ describe("MessagesRepo", () => {
 		expect(repos.messages.listPending(burrow.id)).toHaveLength(0);
 	});
 
+	test("claimPendingForRun marks all pending delivered atomically and orders by priority then FIFO", () => {
+		const burrow = seedBurrow(repos);
+		const run = repos.runs.enqueue({ burrowId: burrow.id, agentId: "x", prompt: "p" });
+		const now = new Date(Math.floor(Date.now() / 1000) * 1000);
+
+		const a = repos.messages.send({
+			burrowId: burrow.id,
+			fromActor: "user",
+			body: "a-low",
+			priority: "low",
+			now: new Date(100),
+		});
+		const b = repos.messages.send({
+			burrowId: burrow.id,
+			fromActor: "user",
+			body: "b-urgent",
+			priority: "urgent",
+			now: new Date(200),
+		});
+		const c = repos.messages.send({
+			burrowId: burrow.id,
+			fromActor: "user",
+			body: "c-normal",
+			priority: "normal",
+			now: new Date(300),
+		});
+
+		const claimed = repos.messages.claimPendingForRun(burrow.id, run.id, now);
+		expect(claimed.map((m) => m.id)).toEqual([b.id, c.id, a.id]);
+		for (const row of claimed) {
+			expect(row.state).toBe("delivered");
+			expect(row.deliveredAtRunId).toBe(run.id);
+			expect(row.deliveredAt?.getTime()).toBe(now.getTime());
+		}
+		expect(repos.messages.listPending(burrow.id)).toHaveLength(0);
+		expect(repos.messages.require(a.id).state).toBe("delivered");
+	});
+
+	test("claimPendingForRun is scoped to a single burrow", () => {
+		const a = seedBurrow(repos);
+		const b = repos.burrows.create({
+			kind: "project",
+			projectRoot: "/r2",
+			workspacePath: "/r2/ws",
+			branch: "main",
+			provider: "local",
+			profile: {},
+		});
+		const run = repos.runs.enqueue({ burrowId: a.id, agentId: "x", prompt: "p" });
+		repos.messages.send({ burrowId: a.id, fromActor: "u", body: "for-a" });
+		repos.messages.send({ burrowId: b.id, fromActor: "u", body: "for-b" });
+
+		const claimed = repos.messages.claimPendingForRun(a.id, run.id);
+		expect(claimed).toHaveLength(1);
+		expect(claimed[0]?.body).toBe("for-a");
+		expect(repos.messages.listPending(b.id)).toHaveLength(1);
+	});
+
+	test("claimPendingForRun returns an empty array when nothing is pending", () => {
+		const burrow = seedBurrow(repos);
+		const run = repos.runs.enqueue({ burrowId: burrow.id, agentId: "x", prompt: "p" });
+		expect(repos.messages.claimPendingForRun(burrow.id, run.id)).toEqual([]);
+	});
+
 	test("resetDeliveredOrphans only resets messages whose run is missing or non-terminal", () => {
 		const burrow = seedBurrow(repos);
 		const liveRun = repos.runs.enqueue({

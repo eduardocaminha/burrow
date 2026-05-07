@@ -103,6 +103,42 @@ export class MessagesRepo {
 		return { ...current, ...patch };
 	}
 
+	/**
+	 * Atomically claim every pending message for a burrow against a single run.
+	 * Used by the run loop right before it spawns a turn — the runtime sees the
+	 * returned rows as `SpawnContext.pendingMessages` (SPEC §13.2). Claiming
+	 * inside a transaction keeps two concurrent turns on the same burrow from
+	 * delivering the same message twice; the recovery sweep resets any rows
+	 * stuck on a non-terminal run if the spawn dies before the turn completes.
+	 */
+	claimPendingForRun(burrowId: string, runId: string, now: Date = new Date()): MessageRow[] {
+		return this.db.transaction((tx) => {
+			const rows = tx
+				.select()
+				.from(messages)
+				.where(and(eq(messages.burrowId, burrowId), eq(messages.state, "unread")))
+				.orderBy(asc(messages.createdAt))
+				.all();
+			if (rows.length === 0) return [];
+			const sorted = rows.sort((a, b) => {
+				const dp = PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority];
+				if (dp !== 0) return dp;
+				return a.createdAt.getTime() - b.createdAt.getTime();
+			});
+			const ids = sorted.map((r) => r.id);
+			tx.update(messages)
+				.set({ state: "delivered", deliveredAtRunId: runId, deliveredAt: now })
+				.where(inArray(messages.id, ids))
+				.run();
+			return sorted.map((r) => ({
+				...r,
+				state: "delivered" as const,
+				deliveredAtRunId: runId,
+				deliveredAt: now,
+			}));
+		});
+	}
+
 	markFailed(id: string, now: Date = new Date()): MessageRow {
 		const current = this.require(id);
 		const patch: Partial<MessageRow> = { state: "failed", deliveredAt: now };

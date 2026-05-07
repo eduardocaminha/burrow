@@ -81,6 +81,17 @@ export {
 	removeWorktree,
 	type WorktreeEntry,
 } from "./git/worktree.ts";
+export {
+	Inbox,
+	type InboxListFilter,
+	type InboxSendInput,
+} from "./inbox/inbox.ts";
+export {
+	isSpawnPerTurn,
+	type PrepareTurnInjectionInput,
+	prepareTurnInjection,
+	type TurnInjection,
+} from "./inbox/injector.ts";
 export { createLogger, type Logger } from "./logging/logger.ts";
 export { buildBwrapArgv, SYSTEM_RO_MOUNTS } from "./provider/local/bwrap.ts";
 export { type RunSandboxedOptions, runSandboxed } from "./provider/local/sandbox.ts";
