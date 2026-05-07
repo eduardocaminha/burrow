@@ -10,10 +10,13 @@
  * Network policy:
  *   - "open"       — `(allow network*)`.
  *   - "none"       — no rule (default deny).
- *   - "restricted" — `(allow network-outbound (regex "^.*\\.<dom>"))` per
- *     allowed domain, plus the local mDNSResponder socket so DNS lookups
- *     succeed. This is enforceable on macOS today; the Linux equivalent
- *     waits on the proxy work in SPEC §25.3.
+ *   - "restricted" — only loopback to `profile.proxyAddress` is permitted.
+ *     A per-burrow userspace proxy (src/proxy/server.ts) runs host-side
+ *     and enforces the `allowedDomains` allowlist. DNS happens host-side
+ *     in the proxy, so the sandbox never needs mDNSResponder access. The
+ *     run dispatcher sets `proxyAddress` per-run before rendering — when
+ *     it's missing, restricted mode falls back to deny-everything (still
+ *     better than the legacy hostname regex, which never matched anything).
  */
 
 import type { SandboxProfile, SpawnCommand } from "../types.ts";
@@ -95,18 +98,20 @@ function renderNetworkRules(profile: SandboxProfile): string[] {
 	if (profile.network === "open") return ["(allow network*)"];
 	if (profile.network === "none") return [];
 
-	const rules: string[] = [];
-	rules.push('(allow network-outbound (literal "/private/var/run/mDNSResponder"))');
-	for (const domain of profile.allowedDomains) {
-		const escaped = escapeRegexDots(domain);
-		rules.push(`(allow network-outbound (regex ${sbString(`^.*\\.${escaped}$`)}))`);
-		rules.push(`(allow network-outbound (regex ${sbString(`^${escaped}$`)}))`);
-	}
-	return rules;
-}
-
-function escapeRegexDots(domain: string): string {
-	return domain.replace(/\./g, "\\.");
+	// network=restricted. The host-side userspace proxy enforces the
+	// allowlist; sandbox-exec only needs to permit loopback to that endpoint.
+	// Without a proxyAddress we leave the rules empty — the legacy hostname
+	// regex was a no-op (sandbox-exec matches against the resolved IP, not
+	// the hostname) and silently denied everything; explicit deny is at
+	// least honest.
+	//
+	// `(remote tcp ...)` only accepts `localhost` or `*` as the host token in
+	// sandbox-exec's grammar (numeric IPs raise `host must be * or localhost
+	// in network address`). `localhost` covers both `127.0.0.1` and `::1`,
+	// which is what client connections to the loopback proxy will resolve to.
+	const proxy = profile.proxyAddress;
+	if (!proxy) return [];
+	return [`(allow network-outbound (remote tcp ${sbString(`localhost:${proxy.port}`)}))`];
 }
 
 /** Quote a string for SBPL: escape backslash and double-quote. */

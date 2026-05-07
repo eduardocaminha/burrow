@@ -170,6 +170,13 @@ export type {
 	SpawnResult,
 } from "./provider/types.ts";
 export {
+	matchAllowedDomain,
+	type ProxyHandle,
+	type ProxyLogger,
+	type StartProxyOptions,
+	startProxy,
+} from "./proxy/server.ts";
+export {
 	type RunHandler,
 	type RunHandlerContext,
 	RunLoop,

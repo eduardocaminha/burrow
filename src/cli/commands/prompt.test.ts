@@ -7,6 +7,7 @@ import { AgentNotInstalled, ValidationError } from "../../core/errors.ts";
 import type { BurrowRow } from "../../db/schema.ts";
 import { Client } from "../../lib/client.ts";
 import type { SandboxProfile, SpawnCommand, SpawnResult } from "../../provider/types.ts";
+import type { ProxyHandle, StartProxyOptions } from "../../proxy/server.ts";
 import type { AgentRuntime } from "../../runtime/runtime.ts";
 import {
 	type PromptCommandInput,
@@ -14,6 +15,7 @@ import {
 	renderPromptResult,
 	runPromptCommand,
 	type SpawnFn,
+	type StartProxyFn,
 } from "./prompt.ts";
 
 interface CollectedSpawn {
@@ -365,6 +367,125 @@ describe("runPromptCommand", () => {
 
 		expect(result.eventsPersisted).toBe(1);
 		expect(out.lines()).toEqual([]);
+	});
+
+	test("network=restricted starts a proxy, injects HTTP_PROXY, sets proxyAddress, stops on exit", async () => {
+		const burrow = seedActiveBurrow(client, {
+			network: "restricted",
+			allowedDomains: ["api.anthropic.com"],
+		});
+		client.agents.register(fakeRuntime());
+		const calls: CollectedSpawn[] = [];
+
+		const startedWith: { value: StartProxyOptions | null } = { value: null };
+		let stopCalls = 0;
+		const fakeProxy: StartProxyFn = async (opts) => {
+			startedWith.value = opts;
+			const handle: ProxyHandle = {
+				port: 51234,
+				url: "http://127.0.0.1:51234",
+				get deniedCount() {
+					return 0;
+				},
+				get allowedCount() {
+					return 0;
+				},
+				stop: async () => {
+					stopCalls += 1;
+				},
+			};
+			return handle;
+		};
+
+		const result = await runPromptCommand({
+			client,
+			burrowId: burrow.id,
+			prompt: "p",
+			options: { agent: "fake", noStream: true },
+			stdout: collectStdout().stream,
+			isTty: false,
+			spawn: fakeSpawn({ stdoutLines: ["ok"], calls }),
+			startProxy: fakeProxy,
+		});
+
+		expect(result.state).toBe("succeeded");
+		expect(startedWith.value).not.toBeNull();
+		expect(startedWith.value?.allowedDomains).toEqual(["api.anthropic.com"]);
+		expect(stopCalls).toBe(1);
+
+		expect(calls).toHaveLength(1);
+		const spawned = calls[0];
+		expect(spawned?.profile.proxyAddress).toEqual({ host: "127.0.0.1", port: 51234 });
+		expect(spawned?.command.env?.HTTP_PROXY).toBe("http://127.0.0.1:51234");
+		expect(spawned?.command.env?.HTTPS_PROXY).toBe("http://127.0.0.1:51234");
+		expect(spawned?.command.env?.http_proxy).toBe("http://127.0.0.1:51234");
+		expect(spawned?.command.env?.https_proxy).toBe("http://127.0.0.1:51234");
+	});
+
+	test("network=open does not start a proxy or set proxyAddress", async () => {
+		const burrow = seedActiveBurrow(client, { network: "open" });
+		client.agents.register(fakeRuntime());
+		const calls: CollectedSpawn[] = [];
+		let proxyStarts = 0;
+		const fakeProxy: StartProxyFn = async () => {
+			proxyStarts += 1;
+			throw new Error("should not be called");
+		};
+
+		await runPromptCommand({
+			client,
+			burrowId: burrow.id,
+			prompt: "p",
+			options: { agent: "fake", noStream: true },
+			stdout: collectStdout().stream,
+			isTty: false,
+			spawn: fakeSpawn({ stdoutLines: ["ok"], calls }),
+			startProxy: fakeProxy,
+		});
+
+		expect(proxyStarts).toBe(0);
+		expect(calls[0]?.profile.proxyAddress).toBeUndefined();
+		expect(calls[0]?.command.env?.HTTP_PROXY).toBeUndefined();
+	});
+
+	test("proxy is stopped even when spawn rejects", async () => {
+		const burrow = seedActiveBurrow(client, {
+			network: "restricted",
+			allowedDomains: ["github.com"],
+		});
+		client.agents.register(fakeRuntime());
+
+		let stopCalls = 0;
+		const fakeProxy: StartProxyFn = async () => ({
+			port: 9999,
+			url: "http://127.0.0.1:9999",
+			get deniedCount() {
+				return 0;
+			},
+			get allowedCount() {
+				return 0;
+			},
+			stop: async () => {
+				stopCalls += 1;
+			},
+		});
+		const failingSpawn: SpawnFn = async () => {
+			throw new Error("kaboom");
+		};
+
+		await expect(
+			runPromptCommand({
+				client,
+				burrowId: burrow.id,
+				prompt: "p",
+				options: { agent: "fake", noStream: true },
+				stdout: collectStdout().stream,
+				isTty: false,
+				spawn: failingSpawn,
+				startProxy: fakeProxy,
+			}),
+		).rejects.toThrow(/kaboom/);
+		expect(stopCalls).toBe(1);
 	});
 
 	test("aborting via signal cancels the spawn and finalizes cancelled", async () => {

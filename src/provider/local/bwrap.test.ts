@@ -35,15 +35,29 @@ describe("buildBwrapArgv", () => {
 		expect(argv).toContain("--share-net");
 	});
 
-	test("network=none and network=restricted both keep net unshared", () => {
+	test("network=none keeps net unshared; network=restricted needs proxyAddress to share-net", () => {
 		const none = buildBwrapArgv(baseProfile({ network: "none" }), cmd(), { hostEnv: {} });
-		const restricted = buildBwrapArgv(
+		const restrictedNoProxy = buildBwrapArgv(
 			baseProfile({ network: "restricted", allowedDomains: ["github.com"] }),
 			cmd(),
 			{ hostEnv: {} },
 		);
+		const restrictedWithProxy = buildBwrapArgv(
+			baseProfile({
+				network: "restricted",
+				allowedDomains: ["github.com"],
+				proxyAddress: { host: "127.0.0.1", port: 51234 },
+			}),
+			cmd(),
+			{ hostEnv: {} },
+		);
 		expect(none).not.toContain("--share-net");
-		expect(restricted).not.toContain("--share-net");
+		// Restricted without a proxy stays deny-all (broken legacy behavior is
+		// surfaced explicitly: callers can declare intent today).
+		expect(restrictedNoProxy).not.toContain("--share-net");
+		// Restricted + proxy shares the host net so the agent can reach the
+		// loopback proxy that enforces the domain allowlist.
+		expect(restrictedWithProxy).toContain("--share-net");
 	});
 
 	test("workspace is bound read-write at /workspace", () => {

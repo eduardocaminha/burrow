@@ -45,18 +45,36 @@ describe("buildSeatbeltProfile", () => {
 		expect(out).not.toMatch(/allow network/);
 	});
 
-	test("network=restricted allows mDNS + per-domain regex with escaped dots", () => {
+	test("network=restricted with proxyAddress allows loopback to the proxy port", () => {
 		const out = buildSeatbeltProfile(
 			baseProfile({
 				network: "restricted",
 				allowedDomains: ["registry.npmjs.org", "github.com"],
+				proxyAddress: { host: "127.0.0.1", port: 51234 },
 			}),
 		);
-		expect(out).toContain('(allow network-outbound (literal "/private/var/run/mDNSResponder"))');
-		expect(out).toContain('"^.*\\\\.registry\\\\.npmjs\\\\.org$"');
-		expect(out).toContain('"^.*\\\\.github\\\\.com$"');
-		// also matches the bare domain, not just subdomains
-		expect(out).toContain('"^registry\\\\.npmjs\\\\.org$"');
+		// sandbox-exec's `remote tcp` only accepts `localhost`/`*` as the
+		// host token; numeric IPs raise a parse error. The host-side proxy
+		// enforces the domain allowlist behind that loopback endpoint.
+		expect(out).toContain('(allow network-outbound (remote tcp "localhost:51234"))');
+		expect(out).not.toMatch(/127\.0\.0\.1:51234/);
+		// Domain rules are no longer in the profile (sandbox-exec can't
+		// match by hostname after DNS — see burrow-14b6).
+		expect(out).not.toMatch(/regex/);
+		expect(out).not.toContain("mDNSResponder");
+	});
+
+	test("network=restricted without proxyAddress denies all outbound", () => {
+		const out = buildSeatbeltProfile(
+			baseProfile({
+				network: "restricted",
+				allowedDomains: ["github.com"],
+			}),
+		);
+		// Without a proxy endpoint the profile emits no allow rules and
+		// falls back to the global deny — explicit, honest, and safer than
+		// the legacy hostname regex which silently denied everything anyway.
+		expect(out).not.toMatch(/allow network/);
 	});
 
 	test("sshAuthSock literal allow is rendered", () => {

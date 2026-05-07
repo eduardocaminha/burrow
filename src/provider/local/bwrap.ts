@@ -11,10 +11,13 @@
  * Network policy:
  *   - "open"       — share the host net namespace (`--share-net`).
  *   - "none"       — no network at all (no `--share-net`).
- *   - "restricted" — currently behaves like "none". Domain-allowlist
- *     enforcement requires the userspace proxy / nftables rules tracked in
- *     SPEC §25.3 and lands in a later phase. Building the profile is
- *     intentional so callers can declare intent today.
+ *   - "restricted" — share the host net namespace so the agent can reach the
+ *     host-side userspace proxy on loopback (the proxy enforces the domain
+ *     allowlist). The agent's HTTP_PROXY/HTTPS_PROXY env points at that
+ *     proxy. This is honor-system enforcement — a non-HTTP-aware tool can
+ *     still reach the host network — until the netns + nftables work in
+ *     SPEC §25 lands. With `proxyAddress` unset we fall back to deny-all
+ *     (no `--share-net`) so callers can declare intent today.
  */
 
 import type { SandboxProfile, SpawnCommand } from "../types.ts";
@@ -46,6 +49,7 @@ export function buildBwrapArgv(
 
 	argv.push("--unshare-all");
 	if (profile.network === "open") argv.push("--share-net");
+	else if (profile.network === "restricted" && profile.proxyAddress) argv.push("--share-net");
 	argv.push("--die-with-parent");
 
 	argv.push("--proc", "/proc");

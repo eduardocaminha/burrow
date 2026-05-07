@@ -25,10 +25,12 @@ import { renderNdjson, renderPretty } from "../../events/render.ts";
 import type { Client } from "../../lib/client.ts";
 import { runSandboxed } from "../../provider/local/sandbox.ts";
 import type { SandboxProfile, SpawnCommand, SpawnResult } from "../../provider/types.ts";
+import { type ProxyHandle, type StartProxyOptions, startProxy } from "../../proxy/server.ts";
 import { composeCodexPrompt, writeCodexPromptFile } from "../../runtime/codex.ts";
 import type { AgentRuntime, InstallCheckResult, RuntimeEvent } from "../../runtime/runtime.ts";
 
 export type SpawnFn = (profile: SandboxProfile, command: SpawnCommand) => Promise<SpawnResult>;
+export type StartProxyFn = (opts: StartProxyOptions) => Promise<ProxyHandle>;
 
 export interface PromptCommandOptions {
 	/** Override the default agent (burrow.toml [[agents]][0].id). */
@@ -52,6 +54,8 @@ export interface PromptCommandInput {
 	isTty?: boolean;
 	/** Test seam: alternate sandboxed-spawn implementation. */
 	spawn?: SpawnFn;
+	/** Test seam: alternate proxy starter (default: src/proxy/server.ts). */
+	startProxy?: StartProxyFn;
 	/** Test seam: skip the runtime's installCheck. */
 	installCheck?: (rt: AgentRuntime) => Promise<InstallCheckResult>;
 	/** Test seam: alternate burrow.toml loader (for default-agent resolution). */
@@ -143,11 +147,46 @@ export async function runPromptCommand(input: PromptCommandInput): Promise<Promp
 	const json = resolveJsonMode(input.options.json, input.isTty);
 	const writeStream = input.options.noStream !== true;
 	const spawn = input.spawn ?? runSandboxed;
+	const startProxyFn = input.startProxy ?? startProxy;
+
+	// `network = "restricted"`: spin up a per-run loopback proxy that enforces
+	// the domain allowlist (SPEC §25 / burrow-14b6). The seatbelt/bwrap
+	// builders read `proxyAddress` to permit only loopback to that endpoint;
+	// the agent's HTTP_PROXY/HTTPS_PROXY env points at the proxy URL.
+	let proxy: ProxyHandle | null = null;
+	let runProfile: SandboxProfile = profile;
+	let runCommand: SpawnCommand = command;
+	if (profile.network === "restricted") {
+		try {
+			proxy = await startProxyFn({ allowedDomains: profile.allowedDomains });
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			repos.runs.finalize(claimed.id, {
+				state: "failed",
+				errorMessage: `failed to start network proxy: ${message}`,
+			});
+			throw err;
+		}
+		runProfile = { ...profile, proxyAddress: { host: "127.0.0.1", port: proxy.port } };
+		runCommand = {
+			...command,
+			env: {
+				...(command.env ?? {}),
+				HTTP_PROXY: proxy.url,
+				HTTPS_PROXY: proxy.url,
+				http_proxy: proxy.url,
+				https_proxy: proxy.url,
+				NO_PROXY: "",
+				no_proxy: "",
+			},
+		};
+	}
 
 	let proc: SpawnResult;
 	try {
-		proc = await spawn(profile, command);
+		proc = await spawn(runProfile, runCommand);
 	} catch (err) {
+		await proxy?.stop();
 		const errorMessage = err instanceof Error ? err.message : String(err);
 		repos.runs.finalize(claimed.id, { state: "failed", errorMessage });
 		throw err;
@@ -213,6 +252,9 @@ export async function runPromptCommand(input: PromptCommandInput): Promise<Promp
 		]);
 	} finally {
 		if (input.signal) input.signal.removeEventListener("abort", onAbort);
+		// Tear the proxy down once the agent is gone — bounded by stop()'s
+		// socket destruction so a hung CONNECT tunnel can't pin the run.
+		await proxy?.stop();
 	}
 
 	const finalized = ((): Run => {

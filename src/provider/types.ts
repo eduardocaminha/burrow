@@ -25,6 +25,14 @@ export interface SandboxProfile {
 	timeoutMs?: number;
 	memoryLimitMb?: number;
 	cpuLimit?: number;
+	/**
+	 * Loopback endpoint of the per-burrow proxy that gates outbound traffic
+	 * under `network = "restricted"`. Set by the run dispatcher right before
+	 * `runSandboxed` (not persisted on the burrow row): the proxy is bound
+	 * to a kernel-assigned port for each run, and the seatbelt/bwrap profile
+	 * builders use this to allow only loopback to that exact endpoint.
+	 */
+	proxyAddress?: { host: string; port: number };
 }
 
 export interface SpawnCommand {
