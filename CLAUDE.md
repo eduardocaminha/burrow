@@ -1,3 +1,60 @@
+# Burrow
+
+OS-isolated sandbox runtime for coding agents. See [SPEC.md](SPEC.md) for the V1 design. Source has not landed yet — these rituals apply once it does.
+
+## Tech Stack
+
+- **Runtime:** Bun (runs TypeScript directly, no build step)
+- **Language:** TypeScript with strict mode (`noUncheckedIndexedAccess`, no `any`)
+- **Linting:** Biome (formatter + linter; lint script runs `--error-on-warnings`, so warnings fail CI)
+- **Storage:** SQLite via `bun:sqlite` for session/event persistence
+- **Sandbox primitives:** `bwrap` (Linux), `sandbox-exec` (macOS) — no Docker, no daemon
+
+## Build & Test Commands
+
+```bash
+bun test                      # Run all tests
+bun test src/foo.test.ts      # Run a single test file
+bun run lint                  # biome check --error-on-warnings .
+bun run typecheck             # tsc --noEmit
+```
+
+## Quality Gates
+
+Run all three before committing — warnings count as failures:
+
+```bash
+bun test && bun run lint && bun run typecheck
+```
+
+CI runs the same trinity. Don't merge with lint warnings; promote to error in `biome.json` or fix at write time.
+
+## TypeScript Conventions
+
+- Strict mode with `noUncheckedIndexedAccess` — always handle possible `undefined` from indexing
+- No `any` — use `unknown` and narrow, or define proper types
+- All shared types in `src/types.ts`
+- Import with `.ts` extensions
+- Tab indentation, 100-char line width (enforced by Biome)
+
+## Version Management
+
+Version lives in two places (kept in sync by `scripts/version-bump.ts` and verified by the publish workflow):
+- `package.json` — `"version"` field
+- `src/index.ts` — `const VERSION = "X.Y.Z"`
+
+Bump via: `bun run version:bump <major|minor|patch>`
+
+## Session Completion Protocol
+
+When ending a work session, complete ALL steps:
+
+1. File issues for remaining work: `sd create --title "..."`
+2. Run quality gates (if code changed): `bun test && bun run lint && bun run typecheck`
+3. Close finished issues: `sd close <id>`
+4. Push: `sd sync && git push`
+5. Verify: `git status` shows "up to date with origin"
+
 <!-- mulch:start -->
 ## Project Expertise (Mulch)
 <!-- mulch-onboard:v0.8.0 -->
