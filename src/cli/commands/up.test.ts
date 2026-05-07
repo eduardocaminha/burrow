@@ -270,6 +270,97 @@ API_KEY = "op://Eng/web/api-key"
 		expect(client.burrows.list({}).length).toBe(0);
 	});
 
+	test("doctor's resolved toolchain paths land on profile.toolchainPaths", async () => {
+		// Two declared toolchains share `/fake/bin` — we expect the dirname dedup
+		// to collapse them into a single entry, in declaration order.
+		writeFileSync(join(projectRoot, "burrow.toml"), `[toolchain]\nbun = "1.1"\nnode = "20"\n`);
+		const result = await runUpCommand({
+			client,
+			projectRoot,
+			options: {},
+			materializer: fakeMaterializer,
+			doctorRunner: async () => ({
+				platform: "linux",
+				ok: true,
+				checks: [],
+				toolchain: {
+					ok: true,
+					missing: [],
+					mismatched: [],
+					results: [
+						{
+							name: "bun",
+							binary: "bun",
+							requested: "1.1",
+							resolvedPath: "/fake/bin/bun",
+							status: "ok",
+							detail: "found",
+						},
+						{
+							name: "node",
+							binary: "node",
+							requested: "20",
+							resolvedPath: "/fake/bin/node",
+							status: "ok",
+							detail: "found",
+						},
+					],
+				},
+			}),
+		});
+		const profile = result.burrow.profileJson as { toolchainPaths: string[] };
+		expect(profile.toolchainPaths).toEqual(["/fake/bin"]);
+	});
+
+	test("declared agents contribute their resolved binary directory to toolchainPaths", async () => {
+		writeFileSync(join(projectRoot, "burrow.toml"), `[[agents]]\nid = "fake-agent"\n`);
+		// Register a runtime that reports a resolved host path the way the
+		// built-ins do via runVersionCheck. `up.ts` reads InstallCheckResult.path
+		// and feeds it through expandToolchainBinDirs.
+		client.agents.register({
+			id: "fake-agent",
+			displayName: "Fake",
+			supportsResume: false,
+			buildSpawnCommand: () => ({ argv: ["fake"] }),
+			parseEvents: () => [],
+			installCheck: async () => ({
+				installed: true,
+				version: "0.0.1",
+				path: "/opt/fakes/bin/fake",
+			}),
+		});
+		const result = await runUpCommand({
+			client,
+			projectRoot,
+			options: {},
+			materializer: fakeMaterializer,
+			skipDoctor: true,
+		});
+		const profile = result.burrow.profileJson as { toolchainPaths: string[] };
+		expect(profile.toolchainPaths).toContain("/opt/fakes/bin");
+	});
+
+	test("an agent that fails its installCheck doesn't block `up` and contributes nothing", async () => {
+		writeFileSync(join(projectRoot, "burrow.toml"), `[[agents]]\nid = "missing-agent"\n`);
+		client.agents.register({
+			id: "missing-agent",
+			displayName: "Missing",
+			supportsResume: false,
+			buildSpawnCommand: () => ({ argv: ["missing"] }),
+			parseEvents: () => [],
+			installCheck: async () => ({ installed: false, hint: "install it" }),
+		});
+		const result = await runUpCommand({
+			client,
+			projectRoot,
+			options: {},
+			materializer: fakeMaterializer,
+			skipDoctor: true,
+		});
+		const profile = result.burrow.profileJson as { toolchainPaths: string[] };
+		expect(profile.toolchainPaths).toEqual([]);
+	});
+
 	test("default_branch from burrow.toml is used when --base-branch is omitted", async () => {
 		writeFileSync(join(projectRoot, "burrow.toml"), `[project]\ndefault_branch = "trunk"\n`);
 		let captured: MaterializeProjectOptions | undefined;

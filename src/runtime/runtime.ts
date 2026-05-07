@@ -20,6 +20,13 @@ export interface InstallCheckResult {
 	installed: boolean;
 	version?: string;
 	hint?: string;
+	/**
+	 * Absolute path to the resolved binary on the host. Surfaced to `burrow up`
+	 * so its directory can be added to `SandboxProfile.toolchainPaths` (SPEC
+	 * §8.4, §19) — without that, the sandbox PATH lookup fails for any agent
+	 * binary that isn't already under `/usr/bin` or `/bin`.
+	 */
+	path?: string;
 }
 
 export interface SpawnContext {

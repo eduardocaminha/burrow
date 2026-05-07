@@ -90,8 +90,16 @@ export function agentConfigToRuntime(config: AgentConfig): AgentRuntime {
 		},
 
 		async installCheck(): Promise<InstallCheckResult> {
+			// Two paths here: when the agent declares an installCheck probe we run
+			// it (and use that as our resolution signal); when it doesn't, we still
+			// resolve `config.command` so toolchainPaths picks up the binary.
+			const resolved = resolveCommandPath(config.command);
 			const probe = config.installCheck;
-			if (!probe) return { installed: true };
+			if (!probe) {
+				const result: InstallCheckResult = { installed: true };
+				if (resolved) result.path = resolved;
+				return result;
+			}
 			try {
 				const proc = Bun.spawn([probe.command, ...(probe.args ?? [])], {
 					stdout: "pipe",
@@ -107,6 +115,7 @@ export function agentConfigToRuntime(config: AgentConfig): AgentRuntime {
 				const out = (await new Response(proc.stdout).text()).trim();
 				const result: InstallCheckResult = { installed: true };
 				if (out.length > 0) result.version = out;
+				if (resolved) result.path = resolved;
 				return result;
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
@@ -210,4 +219,16 @@ async function loadInlineOrFile(value: string): Promise<string> {
 
 function ensureNewline(s: string): string {
 	return s.endsWith("\n") ? s : `${s}\n`;
+}
+
+/**
+ * Resolve a declarative agent's `command` to its host path. Absolute paths
+ * pass through; bare names go through `Bun.which`. Returns `undefined` when
+ * the binary isn't found, so the caller can keep the install check result
+ * shape consistent with built-in runtimes.
+ */
+function resolveCommandPath(command: string): string | undefined {
+	if (isAbsolute(command)) return command;
+	const found = Bun.which(command);
+	return found ?? undefined;
 }

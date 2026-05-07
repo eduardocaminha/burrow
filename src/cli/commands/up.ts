@@ -20,7 +20,7 @@ import { loadBurrowToml } from "../../config/burrow-toml-loader.ts";
 import { ValidationError } from "../../core/errors.ts";
 import { generateId } from "../../core/ids.ts";
 import type { Burrow, BurrowKind } from "../../core/types.ts";
-import type { Client } from "../../lib/client.ts";
+import type { AgentsClient, Client } from "../../lib/client.ts";
 import {
 	type MaterializedWorkspace,
 	type MaterializeProjectOptions,
@@ -31,7 +31,8 @@ import type { BurrowToml } from "../../schemas/burrow-toml.ts";
 import { resolveEnv } from "../../secrets/env.ts";
 import type { OpResolver } from "../../secrets/op.ts";
 import { loadSecretStore } from "../../secrets/store.ts";
-import { assertDoctorOk, runDoctor } from "./doctor.ts";
+import { expandToolchainBinDirs } from "../../toolchain/paths.ts";
+import { assertDoctorOk, type DoctorReport, runDoctor } from "./doctor.ts";
 
 const DEFAULT_BRANCH_PREFIX = "burrow";
 const NETWORK_POLICIES: readonly NetworkPolicy[] = ["none", "restricted", "open"];
@@ -101,11 +102,14 @@ export async function runUpCommand(input: UpCommandInput): Promise<UpCommandResu
 	const network = resolveNetworkPolicy(input.options.network, burrowToml);
 
 	// 3. Run the doctor before any side effects so a missing toolchain refuses
-	// `up` rather than orphaning a worktree (SPEC §19).
+	// `up` rather than orphaning a worktree (SPEC §19). Keep the report —
+	// the OK toolchain rows carry resolved binary paths we'll feed into the
+	// sandbox profile so the agent can actually exec them (SPEC §8.4).
+	let doctorReport: DoctorReport | null = null;
 	if (input.skipDoctor !== true) {
 		const doctor = input.doctorRunner ?? runDoctor;
-		const report = await doctor({ projectRoot });
-		assertDoctorOk(report);
+		doctorReport = await doctor({ projectRoot });
+		assertDoctorOk(doctorReport);
 	}
 
 	// 4. Resolve env + secrets.
@@ -149,6 +153,12 @@ export async function runUpCommand(input: UpCommandInput): Promise<UpCommandResu
 	}
 	const workspace = await materializer(matOpts);
 
+	const toolchainPaths = await collectToolchainPaths({
+		doctorReport,
+		burrowToml,
+		registry: input.client.agents,
+	});
+
 	const profile: SandboxProfile = {
 		workspace: workspace.workspacePath,
 		readOnlyMounts: [],
@@ -156,7 +166,7 @@ export async function runUpCommand(input: UpCommandInput): Promise<UpCommandResu
 		allowedDomains: burrowToml?.sandbox?.allowed_domains ?? [],
 		envPassthrough: [],
 		setEnv: envResult.values,
-		toolchainPaths: [],
+		toolchainPaths,
 	};
 	const timeoutMinutes = burrowToml?.sandbox?.timeout_minutes;
 	if (timeoutMinutes !== undefined) profile.timeoutMs = timeoutMinutes * 60_000;
@@ -189,6 +199,45 @@ function resolveNetworkPolicy(flag: string | undefined, config: BurrowToml | nul
 	if (flag !== undefined) return parseNetworkPolicy(flag);
 	if (config?.sandbox?.network) return config.sandbox.network;
 	return "none";
+}
+
+interface CollectToolchainPathsInput {
+	doctorReport: DoctorReport | null;
+	burrowToml: BurrowToml | null;
+	registry: AgentsClient;
+}
+
+/**
+ * Resolve every host directory the sandbox needs read access to so its
+ * declared toolchains and agents can run (SPEC §8.4, §19). We pull resolved
+ * binary paths from two sources:
+ *   - `[toolchain]` rows that the doctor already probed.
+ *   - `[[agents]]` rows whose runtime is registered — we ask each runtime's
+ *     `installCheck()` for the resolved binary path.
+ *
+ * Each path is expanded into both its `dirname` and the realpath ancestor
+ * (for symlinked installs like `~/.local/bin/claude` →
+ * `~/.local/share/claude/versions/...`). A non-installed agent simply
+ * contributes nothing here; `bw prompt` still gates on installCheck so a
+ * later run against that agent fails with a clean `AgentNotInstalled`.
+ */
+async function collectToolchainPaths(input: CollectToolchainPathsInput): Promise<string[]> {
+	const resolved: string[] = [];
+	for (const row of input.doctorReport?.toolchain?.results ?? []) {
+		if (row.resolvedPath) resolved.push(row.resolvedPath);
+	}
+	for (const agent of input.burrowToml?.agents ?? []) {
+		const rt = input.registry.get(agent.id);
+		if (!rt) continue;
+		try {
+			const check = await rt.installCheck();
+			if (check.installed && check.path) resolved.push(check.path);
+		} catch {
+			// installCheck shouldn't throw, but if a declarative probe fouls up
+			// we don't want it taking `burrow up` down with it.
+		}
+	}
+	return expandToolchainBinDirs(resolved);
 }
 
 export function renderUpResult(result: UpCommandResult): string {

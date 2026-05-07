@@ -21,8 +21,9 @@ export async function runVersionCheck(
 	args: string[],
 	opts: VersionCheckOptions = {},
 ): Promise<InstallCheckResult> {
+	const target = opts.bin ?? bin;
 	try {
-		const proc = Bun.spawn([opts.bin ?? bin, ...args], {
+		const proc = Bun.spawn([target, ...args], {
 			stdout: "pipe",
 			stderr: "pipe",
 		});
@@ -34,8 +35,23 @@ export async function runVersionCheck(
 		const version = out.trim();
 		const result: InstallCheckResult = { installed: true };
 		if (version.length > 0) result.version = version;
+		const resolved = resolveBinaryPath(target);
+		if (resolved) result.path = resolved;
 		return result;
 	} catch {
 		return opts.hint ? { installed: false, hint: opts.hint } : { installed: false };
 	}
+}
+
+/**
+ * Resolve a bare binary name (or absolute path) to its host filesystem
+ * location. `Bun.which` mirrors `command -v`, so we get whatever the user's
+ * PATH actually points at — including symlinks like `~/.local/bin/claude`.
+ * Used to populate `SandboxProfile.toolchainPaths` so the sandbox can read
+ * the binary it's about to exec.
+ */
+function resolveBinaryPath(target: string): string | undefined {
+	if (target.startsWith("/")) return target;
+	const found = Bun.which(target);
+	return found ?? undefined;
 }
