@@ -59,7 +59,28 @@ export {
 	type Repos,
 	RunsRepo,
 } from "./db/repos/index.ts";
+export {
+	BURROW_GITCONFIG_FILENAME,
+	type GitIdentity,
+	type IdentitySpec,
+	readHostGitIdentity,
+	renderBurrowGitconfig,
+	resolveBurrowIdentity,
+	writeBurrowGitconfig,
+} from "./git/identity.ts";
 export { detectSshAgent, type SshAgentPassthrough } from "./git/ssh.ts";
+export {
+	addWorktree,
+	branchExists,
+	cloneRepo,
+	discoverHostClone,
+	type HostClone,
+	initRepo,
+	listWorktrees,
+	pruneWorktrees,
+	removeWorktree,
+	type WorktreeEntry,
+} from "./git/worktree.ts";
 export { createLogger, type Logger } from "./logging/logger.ts";
 export { buildBwrapArgv, SYSTEM_RO_MOUNTS } from "./provider/local/bwrap.ts";
 export { type RunSandboxedOptions, runSandboxed } from "./provider/local/sandbox.ts";
@@ -68,6 +89,17 @@ export {
 	buildSeatbeltProfile,
 	SYSTEM_READ_SUBPATHS,
 } from "./provider/local/seatbelt.ts";
+export {
+	type MaterializedWorkspace,
+	type MaterializedWorkspaceSource,
+	type MaterializeProjectOptions,
+	type MaterializeTaskOptions,
+	materializeProjectWorkspace,
+	materializeTaskWorkspace,
+	type RemoveWorkspaceOptions,
+	removeMaterializedWorkspace,
+	type WorkspaceSourceKind,
+} from "./provider/local/workspace.ts";
 export type {
 	NetworkPolicy,
 	SandboxProfile,
