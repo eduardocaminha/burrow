@@ -148,6 +148,9 @@ export const claudeCodeRuntime: AgentRuntime = {
 				"--output-format",
 				"stream-json",
 				"--verbose",
+				// Burrow's bwrap/sandbox-exec is the enforcement boundary; an in-app
+				// prompt would deadlock a non-interactive spawn.
+				"--dangerously-skip-permissions",
 			],
 			stdin: encodeClaudeStdin(ctx.prompt, ctx.pendingMessages),
 		};
@@ -167,6 +170,7 @@ export const claudeCodeRuntime: AgentRuntime = {
 			"--output-format",
 			"stream-json",
 			"--verbose",
+			"--dangerously-skip-permissions",
 		];
 		if (sessionId) argv.push("--resume", sessionId);
 		return {

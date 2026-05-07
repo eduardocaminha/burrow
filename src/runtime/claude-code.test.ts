@@ -81,6 +81,7 @@ describe("claudeCodeRuntime.buildSpawnCommand", () => {
 			"--output-format",
 			"stream-json",
 			"--verbose",
+			"--dangerously-skip-permissions",
 		]);
 		expect(typeof cmd.stdin).toBe("string");
 		const lines = (cmd.stdin as string).split("\n");
