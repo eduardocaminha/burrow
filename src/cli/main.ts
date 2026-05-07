@@ -36,6 +36,7 @@ import {
 import { renderAgentsAddResult, runAgentsAdd } from "./commands/agents-add.ts";
 import { renderAttachResult, runAttachCommand } from "./commands/attach.ts";
 import { type ChatCommandOptions, lineIterator, runChatCommand } from "./commands/chat.ts";
+import { runCompletionsCommand, SUPPORTED_SHELLS } from "./commands/completions.ts";
 import { renderDestroyResult, runDestroyCommand } from "./commands/destroy.ts";
 import { renderDoctorReport, runDoctor } from "./commands/doctor.ts";
 import { type EventsCommandOptions, runEventsCommand } from "./commands/events.ts";
@@ -569,13 +570,27 @@ program
 	});
 
 program
-	.command("completions <shell>")
-	.description("print shell completion script (bash | zsh | fish)")
+	.command("completions")
+	.description(`print shell completion script (one of: ${SUPPORTED_SHELLS.join(", ")})`)
+	.argument("<shell>", `shell name — one of: ${SUPPORTED_SHELLS.join(", ")}`)
 	.action((shell: string) => {
-		if (!["bash", "zsh", "fish"].includes(shell)) {
-			throw new ValidationError(`unknown shell '${shell}' — expected one of: bash, zsh, fish`);
+		process.stdout.write(runCompletionsCommand(program, shell));
+	});
+
+program
+	.command("upgrade")
+	.description("print the command to upgrade burrow to the latest published version")
+	.option("--json", "emit machine-readable JSON")
+	.action((opts: { json?: boolean }) => {
+		const message = "bun install -g @os-eco/burrow-cli@latest";
+		if (opts.json) {
+			process.stdout.write(`${JSON.stringify({ command: message, current: VERSION })}\n`);
+		} else {
+			process.stdout.write(
+				`current: ${VERSION}\nrun this to upgrade:\n  ${message}\n` +
+					`(npm: \`npm install -g @os-eco/burrow-cli@latest\`)\n`,
+			);
 		}
-		process.stdout.write(renderCompletionsStub(shell));
 	});
 
 async function withClient(handler: (client: Client) => Promise<void>): Promise<void> {
@@ -637,10 +652,6 @@ function parsePositive(raw: string, flag: string): number {
 		throw new ValidationError(`${flag} expects a positive integer, got '${raw}'`);
 	}
 	return n;
-}
-
-function renderCompletionsStub(shell: string): string {
-	return `# burrow ${shell} completions stub\n# Full completions land in Phase 10.\n`;
 }
 
 function exitCodeFor(err: unknown): number {

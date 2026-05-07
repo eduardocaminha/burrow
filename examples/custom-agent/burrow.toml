@@ -1,0 +1,29 @@
+# burrow.toml — declarative agent example.
+# Demonstrates wiring a non-built-in CLI agent via an [[agents]] stanza.
+
+[project]
+name = "demo"
+default_branch = "main"
+
+[sandbox]
+network = "restricted"
+allowed_domains = ["github.com", "registry.npmjs.org"]
+
+[toolchain]
+python = ">=3.11"
+
+[[agents]]
+id = "aider"
+displayName = "Aider"
+command = "aider"
+args = ["--message", "{{prompt}}", "--yes"]   # tokens: {{prompt}} {{workspace}} {{run_id}} {{burrow_id}}
+promptDelivery = "arg"
+outputFormat = "raw-text"
+supportsResume = false
+inboxDelivery = "none"
+requiredEnv = ["OPENAI_API_KEY"]
+
+[agents.installCheck]
+command = "aider"
+args = ["--version"]
+exitCode = 0

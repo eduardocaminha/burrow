@@ -320,7 +320,9 @@ export function parseMetadataPairs(pairs: string[] | undefined): Record<string, 
 	for (const raw of pairs) {
 		const eq = raw.indexOf("=");
 		if (eq <= 0) {
-			throw new ValidationError(`--metadata expects 'key=value', got '${raw}'`);
+			throw new ValidationError(`--metadata expects 'key=value', got '${raw}'`, {
+				recoveryHint: "repeat the flag for multiple pairs: `--metadata foo=1 --metadata bar=2`",
+			});
 		}
 		const key = raw.slice(0, eq);
 		const value = raw.slice(eq + 1);

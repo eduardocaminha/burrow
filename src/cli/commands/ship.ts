@@ -169,7 +169,9 @@ function resolveBurrow(input: ShipCommandInput, projectRoot: string): Burrow | u
 	if (input.burrowId !== undefined) {
 		const found = input.client.burrows.tryGet(input.burrowId);
 		if (!found) {
-			throw new NotFoundError(`burrow not found: ${input.burrowId}`);
+			throw new NotFoundError(`burrow not found: ${input.burrowId}`, {
+				recoveryHint: "run `burrow list` to see known ids",
+			});
 		}
 		return found;
 	}

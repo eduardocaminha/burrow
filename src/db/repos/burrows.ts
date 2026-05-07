@@ -62,7 +62,11 @@ export class BurrowsRepo {
 
 	require(id: string): BurrowRow {
 		const row = this.get(id);
-		if (!row) throw new NotFoundError(`burrow not found: ${id}`);
+		if (!row) {
+			throw new NotFoundError(`burrow not found: ${id}`, {
+				recoveryHint: "run `burrow list` to see known ids",
+			});
+		}
 		return row;
 	}
 

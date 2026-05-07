@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   toolchain + 1Password CLI checks (`--project <root>`, `--no-project`);
   `burrow up` now loads `burrow.toml`, gates on `assertDoctorOk`, and folds
   `[sandbox]`/`[env]`/`[secrets]` into the persisted `SandboxProfile`.
+- Phase 10 — polish pass: real shell completions for bash/zsh/fish via
+  `burrow completions <shell>` (registers both `burrow` and `bw` from one
+  script); `burrow upgrade` prints the npm/bun upgrade hint per SPEC §16.1;
+  README replaced with V1 quickstart + CLI surface; `examples/` directory
+  with a claude-code quickstart and a declarative custom-agent recipe; error
+  message recovery hints filled in for common user-facing throw sites
+  (`burrow not found`, `--metadata` parse, empty inbox body, missing fork
+  parent source, missing settings template path).
 - Host credential forwarding (SPEC §17.4): `AgentRuntime.credentialPaths()`
   declares which host paths a runtime needs read-only inside the sandbox to
   authenticate. `burrow up` collects them across declared `[[agents]]` and

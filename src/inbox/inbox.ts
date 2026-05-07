@@ -34,7 +34,9 @@ export class Inbox {
 
 	send(input: InboxSendInput): Message {
 		if (input.body.length === 0) {
-			throw new ValidationError("inbox message body must not be empty");
+			throw new ValidationError("inbox message body must not be empty", {
+				recoveryHint: 'pass a message body, e.g. `burrow send <id> "stop and write tests first"`',
+			});
 		}
 		const burrow = this.repos.burrows.require(input.burrowId);
 		if (burrow.state !== "active") {

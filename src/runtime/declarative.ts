@@ -212,6 +212,9 @@ async function loadInlineOrFile(value: string): Promise<string> {
 	if (!(await file.exists())) {
 		throw new ValidationError(
 			`agent settings template not found: ${path} (expected an inline JSON literal or a readable file path)`,
+			{
+				recoveryHint: "use an absolute path or paste the JSON inline (must start with `{` or `[`)",
+			},
 		);
 	}
 	return ensureNewline(await file.text());

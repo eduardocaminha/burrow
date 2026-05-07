@@ -55,6 +55,9 @@ export async function runForkCommand(input: ForkCommandInput): Promise<ForkComma
 	if (!parentSource) {
 		throw new ValidationError(
 			`parent ${parent.id} has no recorded workspace source — was it created via burrow up?`,
+			{
+				recoveryHint: "start a fresh project burrow with `burrow up` and fork from it",
+			},
 		);
 	}
 	const parentClonePath = parentSource.hostClonePath ?? parent.workspacePath;
