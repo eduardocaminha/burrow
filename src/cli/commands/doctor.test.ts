@@ -130,6 +130,36 @@ describe("doctor — project-scoped checks", () => {
 		});
 		expect(report.checks.find((c) => c.name === "1Password CLI (op)")).toBeUndefined();
 	});
+
+	test("[sandbox] read_only_paths: existing entries pass; missing or non-absolute fail (burrow-a1b1)", async () => {
+		writeFileSync(
+			join(projectRoot, "burrow.toml"),
+			`
+[sandbox]
+read_only_paths = ["~/known", "/missing/dir", "relative/path"]
+`,
+		);
+		const report = await runDoctor({
+			projectRoot,
+			binaryProbe: async () => true,
+			home: "/u/me",
+			pathExists: (p) => p === "/u/me/known",
+		});
+		const known = report.checks.find((c) => c.name === "sandbox.read_only_paths[~/known]");
+		expect(known?.status).toBe("ok");
+		// Tilde-expanded form is shown so the user can see what we resolved to.
+		expect(known?.detail).toContain("/u/me/known");
+
+		const missing = report.checks.find((c) => c.name === "sandbox.read_only_paths[/missing/dir]");
+		expect(missing?.status).toBe("fail");
+		expect(missing?.detail).toContain("does not exist");
+
+		const relative = report.checks.find((c) => c.name === "sandbox.read_only_paths[relative/path]");
+		expect(relative?.status).toBe("fail");
+		expect(relative?.detail).toContain("must be absolute");
+
+		expect(report.ok).toBe(false);
+	});
 });
 
 describe("assertDoctorOk", () => {

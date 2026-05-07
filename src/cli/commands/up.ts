@@ -15,6 +15,7 @@
  */
 
 import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { loadBurrowToml } from "../../config/burrow-toml-loader.ts";
 import { ValidationError } from "../../core/errors.ts";
@@ -31,7 +32,11 @@ import type { BurrowToml } from "../../schemas/burrow-toml.ts";
 import { resolveEnv } from "../../secrets/env.ts";
 import type { OpResolver } from "../../secrets/op.ts";
 import { loadSecretStore } from "../../secrets/store.ts";
-import { expandToolchainBinDirs, resolveBunGlobalInstallDir } from "../../toolchain/paths.ts";
+import {
+	expandHomePrefix,
+	expandToolchainBinDirs,
+	walkToolchainBinSymlinks,
+} from "../../toolchain/paths.ts";
 import { assertDoctorOk, type DoctorReport, runDoctor } from "./doctor.ts";
 
 const DEFAULT_BRANCH_PREFIX = "burrow";
@@ -69,11 +74,17 @@ export interface UpCommandInput {
 	/** CLI overrides that win over [env].defaults / [secrets] / store / host. */
 	envOverrides?: Record<string, string>;
 	/**
-	 * Test seam for the bun-global-install lookup (burrow-aa46). Tests inject
-	 * a fake to avoid touching the real `~/.bun` layout; the default uses
-	 * `resolveBunGlobalInstallDir()` which inspects host env + filesystem.
+	 * Test seam for the toolchain bin-dir symlink walk (burrow-a1b1). Tests
+	 * inject a fake so they don't depend on the host's real `~/.bun`
+	 * layout. The default invokes `walkToolchainBinSymlinks` against the
+	 * declared-toolchain bin dirs.
 	 */
-	bunGlobalInstallDirResolver?: () => string | null;
+	symlinkWalker?: (binDirs: string[]) => string[];
+	/**
+	 * Override `$HOME` for `[sandbox] read_only_paths` expansion (tests).
+	 * Defaults to `process.env.HOME` then `os.homedir()`.
+	 */
+	home?: string;
 }
 
 export interface UpCommandResult {
@@ -163,13 +174,16 @@ export async function runUpCommand(input: UpCommandInput): Promise<UpCommandResu
 		doctorReport,
 		burrowToml,
 		registry: input.client.agents,
-		bunGlobalInstallDirResolver:
-			input.bunGlobalInstallDirResolver ?? (() => resolveBunGlobalInstallDir()),
+		symlinkWalker: input.symlinkWalker ?? ((binDirs) => walkToolchainBinSymlinks({ binDirs })),
 	});
-	const readOnlyMounts = await collectCredentialPaths({
-		burrowToml,
-		registry: input.client.agents,
-	});
+	const home = input.home ?? input.hostEnv?.HOME ?? process.env.HOME ?? homedir();
+	const readOnlyMounts = mergeReadOnlyMounts(
+		await collectCredentialPaths({
+			burrowToml,
+			registry: input.client.agents,
+		}),
+		resolveSandboxReadOnlyPaths(burrowToml?.sandbox?.read_only_paths ?? [], home),
+	);
 
 	const profile: SandboxProfile = {
 		workspace: workspace.workspacePath,
@@ -217,7 +231,7 @@ interface CollectToolchainPathsInput {
 	doctorReport: DoctorReport | null;
 	burrowToml: BurrowToml | null;
 	registry: AgentsClient;
-	bunGlobalInstallDirResolver: () => string | null;
+	symlinkWalker: (binDirs: string[]) => string[];
 }
 
 /**
@@ -234,37 +248,74 @@ interface CollectToolchainPathsInput {
  * contributes nothing here; `bw prompt` still gates on installCheck so a
  * later run against that agent fails with a clean `AgentNotInstalled`.
  *
- * When `bun` is a declared toolchain we additionally mount its global
- * install root (`<BUN_INSTALL>/install/global/node_modules`) so that
- * stub symlinks under `<BUN_INSTALL>/bin/` (e.g. `ml`, `sd`, `cn`) can
- * resolve to their `.ts` source — see burrow-aa46.
+ * For declared-toolchain bin dirs (only — agents already resolved their own
+ * exact binary), we additionally walk symlinked entries and contribute the
+ * dir each one resolves into. This catches the `bin/<stub>` → `install/<real>`
+ * shape used by bun-globals (`ml`, `sd`, `cn`, …), uv-tool, pyenv shims,
+ * nvm, rustup, mise/asdf without per-tool knowledge — the bun-specific
+ * helper from burrow-aa46 is subsumed by this walk (burrow-a1b1).
  */
 async function collectToolchainPaths(input: CollectToolchainPathsInput): Promise<string[]> {
-	const resolved: string[] = [];
-	let bunIsDeclaredToolchain = false;
+	const toolchainBins: string[] = [];
 	for (const row of input.doctorReport?.toolchain?.results ?? []) {
-		if (row.resolvedPath) resolved.push(row.resolvedPath);
-		if (row.binary === "bun" && row.resolvedPath) bunIsDeclaredToolchain = true;
+		if (row.resolvedPath) toolchainBins.push(row.resolvedPath);
 	}
+	const agentBins: string[] = [];
 	for (const agent of input.burrowToml?.agents ?? []) {
 		const rt = input.registry.get(agent.id);
 		if (!rt) continue;
 		try {
 			const check = await rt.installCheck();
-			if (check.installed && check.path) resolved.push(check.path);
+			if (check.installed && check.path) agentBins.push(check.path);
 		} catch {
 			// installCheck shouldn't throw, but if a declarative probe fouls up
 			// we don't want it taking `burrow up` down with it.
 		}
 	}
-	const expanded = expandToolchainBinDirs(resolved);
-	if (bunIsDeclaredToolchain) {
-		const bunGlobal = input.bunGlobalInstallDirResolver();
-		if (bunGlobal && !expanded.includes(bunGlobal)) {
-			expanded.push(bunGlobal);
+	const toolchainDirs = expandToolchainBinDirs(toolchainBins);
+	const agentDirs = expandToolchainBinDirs(agentBins);
+	const walked = input.symlinkWalker(toolchainDirs);
+
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (const dir of [...toolchainDirs, ...walked, ...agentDirs]) {
+		if (seen.has(dir)) continue;
+		seen.add(dir);
+		out.push(dir);
+	}
+	return out;
+}
+
+/**
+ * Expand `[sandbox] read_only_paths` (burrow-a1b1) into resolved host paths.
+ * A `~`/`~/...`/`$HOME`/`${HOME}` prefix is replaced with the host home dir;
+ * everything else passes through verbatim. Doctor catches non-existent
+ * entries with a fail check, so by the time `up` runs every entry should
+ * exist; we still dedupe defensively.
+ */
+function resolveSandboxReadOnlyPaths(raw: readonly string[], home: string): string[] {
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (const entry of raw) {
+		const expanded = expandHomePrefix(entry, home);
+		if (expanded.length === 0 || seen.has(expanded)) continue;
+		seen.add(expanded);
+		out.push(expanded);
+	}
+	return out;
+}
+
+function mergeReadOnlyMounts(...sources: readonly (readonly string[])[]): string[] {
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (const src of sources) {
+		for (const path of src) {
+			if (path.length === 0 || seen.has(path)) continue;
+			seen.add(path);
+			out.push(path);
 		}
 	}
-	return expanded;
+	return out;
 }
 
 interface CollectCredentialPathsInput {

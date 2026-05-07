@@ -43,6 +43,11 @@ const SandboxSchema = z
 		memory_limit_mb: z.number().int().positive().optional(),
 		cpu_limit: z.number().positive().optional(),
 		toolchain_mode: z.enum(TOOLCHAIN_MODES).optional(),
+		// Extra read-only mounts (host absolute paths) — escape hatch for
+		// toolchains/data dirs the generic symlink walk can't infer
+		// (burrow-a1b1). `~`/`~/...`/`$HOME`/`${HOME}` prefixes are expanded
+		// at `up` time; doctor fails the report if an entry doesn't exist.
+		read_only_paths: z.array(z.string().min(1)).optional(),
 	})
 	.strict();
 

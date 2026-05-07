@@ -13,7 +13,8 @@
  * before sandbox launch and refuses to proceed when any check fails.
  */
 
-import { platform } from "node:os";
+import { existsSync } from "node:fs";
+import { homedir, platform } from "node:os";
 import { BURROW_TOML_FILENAME, loadBurrowToml } from "../../config/burrow-toml-loader.ts";
 import { resolvePaths } from "../../config/paths.ts";
 import { type BurrowError, SandboxPrimitiveMissing, ValidationError } from "../../core/errors.ts";
@@ -25,6 +26,7 @@ import {
 	type ToolchainCheckSummary,
 	type ToolchainProbe,
 } from "../../toolchain/check.ts";
+import { expandHomePrefix } from "../../toolchain/paths.ts";
 import { icon } from "../style.ts";
 
 export type DoctorCheckStatus = "ok" | "fail" | "warn";
@@ -52,6 +54,13 @@ export interface RunDoctorOptions {
 	toolchainProbe?: ToolchainProbe;
 	/** Inject a custom binary-on-PATH probe (tests). Defaults to `command -v`. */
 	binaryProbe?: (name: string) => Promise<boolean>;
+	/**
+	 * Override `$HOME` for `[sandbox] read_only_paths` expansion (tests).
+	 * Defaults to `process.env.HOME` then `os.homedir()`.
+	 */
+	home?: string;
+	/** Test seam — predicate over a host path. Defaults to `fs.existsSync`. */
+	pathExists?: (path: string) => boolean;
 }
 
 const SUCCESS_MARK = (s: string): string => `${icon("ok")} ${s}`;
@@ -90,6 +99,8 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
 			projectRoot: opts.projectRoot,
 			toolchainProbe: opts.toolchainProbe,
 			binaryOnPath,
+			home: opts.home ?? process.env.HOME ?? homedir(),
+			pathExists: opts.pathExists ?? existsSync,
 		});
 	}
 
@@ -102,10 +113,12 @@ interface ProjectChecksContext {
 	projectRoot: string;
 	toolchainProbe?: ToolchainProbe;
 	binaryOnPath: (name: string) => Promise<boolean>;
+	home: string;
+	pathExists: (path: string) => boolean;
 }
 
 async function runProjectChecks(ctx: ProjectChecksContext): Promise<void> {
-	const { report, projectRoot, toolchainProbe, binaryOnPath } = ctx;
+	const { report, projectRoot, toolchainProbe, binaryOnPath, home, pathExists } = ctx;
 	let loaded: BurrowToml | null = null;
 	try {
 		const result = await loadBurrowToml(projectRoot);
@@ -154,6 +167,38 @@ async function runProjectChecks(ctx: ProjectChecksContext): Promise<void> {
 				: "burrow.toml [secrets] uses op:// — install from https://developer.1password.com/docs/cli/get-started/",
 		});
 	}
+
+	for (const raw of loaded.sandbox?.read_only_paths ?? []) {
+		report.checks.push(checkReadOnlyPath(raw, home, pathExists));
+	}
+}
+
+/**
+ * Validate one `[sandbox] read_only_paths` entry. After `~`/`$HOME`
+ * expansion the path must be absolute *and* exist on the host — bwrap's
+ * `--ro-bind` (no `-try`) errors out at sandbox spawn for a missing path,
+ * so silently dropping non-existent entries would just defer the failure
+ * to a confusing run-time error (burrow-a1b1).
+ */
+function checkReadOnlyPath(
+	raw: string,
+	home: string,
+	pathExists: (path: string) => boolean,
+): DoctorCheck {
+	const expanded = expandHomePrefix(raw, home);
+	const detail = expanded === raw ? raw : `${raw} → ${expanded}`;
+	const name = `sandbox.read_only_paths[${raw}]`;
+	if (!expanded.startsWith("/")) {
+		return {
+			name,
+			status: "fail",
+			detail: `${detail} (must be absolute after ~/$HOME expansion)`,
+		};
+	}
+	if (!pathExists(expanded)) {
+		return { name, status: "fail", detail: `${detail} (does not exist on host)` };
+	}
+	return { name, status: "ok", detail };
 }
 
 function toolchainRowToCheck(r: ToolchainCheckResult): DoctorCheck {

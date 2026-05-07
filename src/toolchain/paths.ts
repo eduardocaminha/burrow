@@ -19,9 +19,9 @@
  * paths that actually resolved.
  */
 
-import { existsSync, realpathSync } from "node:fs";
+import { type Dirent, readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 
 export function expandToolchainBinDirs(paths: Iterable<string | null | undefined>): string[] {
 	const out: string[] = [];
@@ -52,39 +52,134 @@ function realpathDirOrNull(path: string): string | null {
 	}
 }
 
-export interface ResolveBunGlobalInstallDirInput {
-	/** Override `BUN_INSTALL`. Defaults to the value from `hostEnv`. */
-	bunInstall?: string | undefined;
-	/** Host env (defaults to `process.env`); supplies `BUN_INSTALL` when set. */
-	hostEnv?: Record<string, string | undefined>;
-	/** Override `$HOME`. Defaults to `os.homedir()`. */
-	home?: string;
-	/** Existence probe (test seam). Defaults to `fs.existsSync`. */
-	exists?: (path: string) => boolean;
+export interface WalkToolchainBinSymlinksInput {
+	/** Bin directories to walk. Each must be absolute. */
+	binDirs: Iterable<string>;
+	/** Cap how many entries we stat per bin dir. Defaults to 256. */
+	maxEntries?: number;
+	/** Test seam — list directory entries (defaults to `fs.readdirSync` w/ types). */
+	readdir?: (dir: string) => readonly Pick<Dirent, "name" | "isSymbolicLink">[];
+	/** Test seam — resolve a symlink. Defaults to `fs.realpathSync`. */
+	realpath?: (path: string) => string;
 }
 
 /**
- * Resolve the directory where `bun add -g <pkg>` lays down packages
- * (`<BUN_INSTALL>/install/global/node_modules`).
+ * For each declared-toolchain bin directory, follow each symlinked entry and
+ * contribute a host directory whose mount lets the symlink's target load
+ * inside the sandbox. Generalises the `bin/<stub>` symlink → `install/<real>`
+ * shape used by bun-globals (`ml`, `sd`, `cn`, …), uv-tool, pyenv shims, nvm,
+ * rustup, and mise/asdf — without any per-tool knowledge.
  *
- * Globally-installed bun CLIs ship as a stub symlink under `<BUN_INSTALL>/bin/`
- * whose target points into `install/global/node_modules/<scope>/<pkg>/...`
- * (a `.ts` source file with a bun shebang). The toolchain mount only covers
- * the `bin` directory, so the stub is visible by name but bun's read of the
- * realpath target is denied by the sandbox — and bun reports the failure as
- * `error loading current directory` (burrow-aa46). Mounting the install root
- * lets every bun-installed CLI (`ml`, `sd`, `cn`, `ov`, …) load.
+ * Bound: realpath targets must stay within `dirname(binDir)` (the toolchain
+ * "root" — the bin's parent). A rogue symlink pointing at `/etc` or `/var`
+ * is dropped silently. Bin dirs whose parent resolves to `/` are skipped on
+ * the same reasoning.
  *
- * Returns `null` when the install root doesn't exist (no bun-globals
- * installed, or BUN_INSTALL points somewhere unusual). Callers should treat
- * a `null` result as "nothing to mount" and proceed without it.
+ * Special-case for node-style ecosystems: when the resolved target lives
+ * inside a `node_modules` subtree (within the trusted root), we contribute
+ * the *outermost* such ancestor instead of `dirname(realpath)`. That's what
+ * makes globally-installed bun packages load — bun's bare-import resolution
+ * walks ancestor `node_modules` dirs from the entrypoint, so mounting a
+ * deeper sub-dir wouldn't suffice. For non-node ecosystems we fall back to
+ * `dirname(realpath)`; sibling layouts (pyenv `lib/`, uv venv `lib/`) still
+ * need the `[sandbox] read_only_paths` escape hatch.
+ *
+ * Bin dirs that don't exist or can't be read are skipped (consistent with
+ * `expandToolchainBinDirs` — missing inputs don't fail `up`).
  */
-export function resolveBunGlobalInstallDir(
-	input: ResolveBunGlobalInstallDirInput = {},
-): string | null {
-	const env = input.hostEnv ?? process.env;
-	const root = input.bunInstall ?? env.BUN_INSTALL ?? join(input.home ?? homedir(), ".bun");
-	const candidate = join(root, "install", "global", "node_modules");
-	const probe = input.exists ?? existsSync;
-	return probe(candidate) ? candidate : null;
+export function walkToolchainBinSymlinks(input: WalkToolchainBinSymlinksInput): string[] {
+	const cap = input.maxEntries ?? 256;
+	const readdirFn = input.readdir ?? defaultReaddir;
+	const realpathFn = input.realpath ?? realpathSync;
+
+	const out: string[] = [];
+	const seen = new Set<string>();
+	const add = (dir: string): void => {
+		if (dir.length === 0 || seen.has(dir)) return;
+		seen.add(dir);
+		out.push(dir);
+	};
+
+	for (const binDirRaw of input.binDirs) {
+		if (binDirRaw.length === 0) continue;
+		// Canonicalise the bin dir before computing the trusted root.
+		// realpathSync of a symlinked entry returns canonical form (`/private/...`
+		// on macOS); without canonicalising the input, `isWithin` would compare
+		// `/var/folders/...` to `/private/var/folders/...` and reject every hit.
+		let binDir: string;
+		try {
+			binDir = realpathFn(binDirRaw);
+		} catch {
+			continue;
+		}
+		const trustedRoot = dirname(binDir);
+		if (trustedRoot === "/" || trustedRoot === "" || trustedRoot === binDir) continue;
+
+		let entries: readonly Pick<Dirent, "name" | "isSymbolicLink">[];
+		try {
+			entries = readdirFn(binDir);
+		} catch {
+			continue;
+		}
+
+		let walked = 0;
+		for (const entry of entries) {
+			if (walked >= cap) break;
+			walked++;
+			if (!entry.isSymbolicLink()) continue;
+
+			let resolved: string;
+			try {
+				resolved = realpathFn(join(binDir, entry.name));
+			} catch {
+				continue;
+			}
+			if (!isWithin(resolved, trustedRoot)) continue;
+
+			const dir = dirname(resolved);
+			if (dir === binDir) continue;
+
+			const nodeModulesAncestor = outermostNodeModulesAncestor(dir, trustedRoot);
+			add(nodeModulesAncestor ?? dir);
+		}
+	}
+	return out;
+}
+
+function defaultReaddir(dir: string): readonly Dirent[] {
+	return readdirSync(dir, { withFileTypes: true });
+}
+
+function isWithin(path: string, root: string): boolean {
+	if (path === root) return true;
+	if (root === "/") return path.startsWith("/");
+	return path.startsWith(`${root}${sep}`);
+}
+
+function outermostNodeModulesAncestor(start: string, trustedRoot: string): string | null {
+	let cursor = start;
+	let outermost: string | null = null;
+	while (cursor !== trustedRoot && isWithin(cursor, trustedRoot)) {
+		if (basename(cursor) === "node_modules") outermost = cursor;
+		const parent = dirname(cursor);
+		if (parent === cursor) break;
+		cursor = parent;
+	}
+	return outermost;
+}
+
+/**
+ * Expand a leading `~`, `~/...`, `$HOME`, or `${HOME}` to the host home dir.
+ * Anything else is returned verbatim (so absolute paths and unrecognised
+ * shapes pass through). Used to render `[sandbox] read_only_paths` entries
+ * before they land on `SandboxProfile.readOnlyMounts`.
+ */
+export function expandHomePrefix(value: string, home: string = homedir()): string {
+	if (value === "~") return home;
+	if (value.startsWith("~/")) return join(home, value.slice(2));
+	const HOME_BRACE = `$${"{HOME}"}`; // Spelled out to dodge biome's template-in-string rule.
+	if (value === "$HOME" || value === HOME_BRACE) return home;
+	if (value.startsWith("$HOME/")) return join(home, value.slice("$HOME/".length));
+	if (value.startsWith(`${HOME_BRACE}/`)) return join(home, value.slice(HOME_BRACE.length + 1));
+	return value;
 }
