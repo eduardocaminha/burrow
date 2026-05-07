@@ -124,6 +124,21 @@ export {
 	prepareTurnInjection,
 	type TurnInjection,
 } from "./inbox/injector.ts";
+export {
+	AgentsClient,
+	type BurrowListFilter,
+	BurrowsClient,
+	Client,
+	type ClientOpenOptions,
+	EventsClient,
+	type EventTailFilter,
+	InboxClient,
+	type InboxListFilter as ClientInboxListFilter,
+	type InboxSendInput as ClientInboxSendInput,
+	type RunCreateInput,
+	type RunListFilter,
+	RunsClient,
+} from "./lib/client.ts";
 export { createLogger, type Logger } from "./logging/logger.ts";
 export { buildBwrapArgv, SYSTEM_RO_MOUNTS } from "./provider/local/bwrap.ts";
 export { type RunSandboxedOptions, runSandboxed } from "./provider/local/sandbox.ts";

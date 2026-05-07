@@ -1,0 +1,397 @@
+/**
+ * Top-level library entry (SPEC §15).
+ *
+ * `Client.open()` is the single async constructor: it resolves paths, opens
+ * the SQLite database (running migrations), boots an `AgentRegistry` with the
+ * built-ins, and wires an in-process `EventBus`. The client owns these
+ * resources and tears them down via `close()`.
+ *
+ * The five SPEC namespaces (burrows / runs / inbox / events / agents) are
+ * surfaced as instance fields. Each is a thin wrapper over the lower-level
+ * primitives (repos, helpers in src/events/*, src/inbox/*) so callers don't
+ * have to learn the internal layering — and so cross-cutting concerns like
+ * "publish the destroy event before pruning" land in one place.
+ *
+ * Consumers:
+ *   - The CLI in src/cli/main.ts opens a Client per invocation.
+ *   - Library users (overstory, greenhouse) hold a long-lived Client.
+ *   - Tests open Client.open({ dataDir, configDir }) against tmp dirs.
+ */
+
+import { resolvePaths } from "../config/paths.ts";
+import { ValidationError } from "../core/errors.ts";
+import type {
+	Burrow,
+	BurrowKind,
+	BurrowState,
+	Message,
+	MessagePriority,
+	MessageState,
+	Run,
+	RunEvent,
+	RunState,
+} from "../core/types.ts";
+import { type BurrowDb, openDatabase } from "../db/client.ts";
+import { createRepos, type Repos } from "../db/repos/index.ts";
+import { type DestroyBurrowResult, destroyBurrowStorage } from "../events/destroy.ts";
+import { type TailAllOptions, type TailOptions, tailAll, tailBurrow } from "../events/poll.ts";
+import { EventBus, type Subscription } from "../events/tail.ts";
+import { Inbox } from "../inbox/inbox.ts";
+import { createLogger, type Logger } from "../logging/logger.ts";
+import { AgentRegistry } from "../runtime/registry.ts";
+import type { AgentRuntime } from "../runtime/runtime.ts";
+import type { AgentConfig } from "../schemas/agent-config.ts";
+
+export interface ClientOpenOptions {
+	dataDir?: string;
+	configDir?: string;
+	cacheDir?: string;
+	/** Override the SQLite path. Defaults to `${dataDir}/db.sqlite`. */
+	dbPath?: string;
+	/** Pre-resolved logger; one is created if omitted. */
+	logger?: Logger;
+}
+
+export interface BurrowListFilter {
+	kind?: BurrowKind;
+	state?: BurrowState;
+	projectRoot?: string;
+}
+
+export interface RunListFilter {
+	burrowId?: string;
+	state?: RunState | RunState[];
+	limit?: number;
+}
+
+export interface InboxListFilter {
+	state?: MessageState;
+}
+
+export interface InboxSendInput {
+	burrowId: string;
+	body: string;
+	priority?: MessagePriority;
+	fromActor?: string;
+}
+
+export interface RunCreateInput {
+	burrowId: string;
+	agentId: string;
+	prompt: string;
+	metadata?: unknown;
+}
+
+export interface EventTailFilter {
+	burrowId?: string;
+	burrowIds?: string[];
+	kinds?: string[];
+	since?: number | Record<string, number>;
+	signal?: AbortSignal;
+	pollIntervalMs?: number;
+	once?: boolean;
+}
+
+/**
+ * Burrows namespace (SPEC §15.1).
+ */
+export class BurrowsClient {
+	constructor(
+		private readonly client: Client,
+		private readonly repos: Repos,
+	) {}
+
+	list(filter: BurrowListFilter = {}): Burrow[] {
+		let rows = filter.state
+			? this.repos.burrows.listByState(filter.state, filter.kind)
+			: this.repos.burrows.listAll();
+		if (filter.kind && !filter.state) {
+			rows = rows.filter((b) => b.kind === filter.kind);
+		}
+		if (filter.projectRoot) {
+			rows = rows.filter((b) => b.projectRoot === filter.projectRoot);
+		}
+		return rows;
+	}
+
+	get(id: string): Burrow {
+		return this.repos.burrows.require(id);
+	}
+
+	tryGet(id: string): Burrow | null {
+		return this.repos.burrows.get(id);
+	}
+
+	stop(id: string): Burrow {
+		return this.repos.burrows.markStopped(id);
+	}
+
+	resume(id: string): Burrow {
+		return this.repos.burrows.markActive(id);
+	}
+
+	/**
+	 * Archive then prune the burrow's rows (SPEC §14.4 steps 2-6). Workspace
+	 * teardown is the caller's responsibility — see the `destroy` CLI command
+	 * for the full flow including provider workspace removal.
+	 */
+	async destroy(id: string, opts: { archive?: boolean } = {}): Promise<DestroyBurrowResult> {
+		return destroyBurrowStorage({
+			db: this.client.db,
+			burrowId: id,
+			archiveRoot: this.client.paths.archiveDir,
+			...(opts.archive !== undefined ? { archive: opts.archive } : {}),
+		});
+	}
+}
+
+/**
+ * Runs namespace (SPEC §15.2).
+ */
+export class RunsClient {
+	constructor(private readonly repos: Repos) {}
+
+	create(input: RunCreateInput): Run {
+		this.repos.burrows.require(input.burrowId);
+		return this.repos.runs.enqueue({
+			burrowId: input.burrowId,
+			agentId: input.agentId,
+			prompt: input.prompt,
+			metadata: input.metadata,
+		});
+	}
+
+	get(id: string): Run {
+		return this.repos.runs.require(id);
+	}
+
+	tryGet(id: string): Run | null {
+		return this.repos.runs.get(id);
+	}
+
+	list(filter: RunListFilter = {}): Run[] {
+		if (filter.burrowId) {
+			return this.repos.runs.listByBurrow(filter.burrowId, filter.limit ?? 50);
+		}
+		if (filter.state) {
+			return this.repos.runs.listByState(filter.state);
+		}
+		return this.repos.runs.listTerminal();
+	}
+
+	cancel(id: string): Run {
+		return this.repos.runs.finalize(id, {
+			state: "cancelled",
+			errorMessage: "cancelled via Client.runs.cancel",
+		});
+	}
+
+	/**
+	 * Tail one run's events as they're persisted. Filters the burrow-level
+	 * stream down to the specified runId; honours the AbortSignal.
+	 */
+	async *stream(
+		id: string,
+		opts: { signal?: AbortSignal; pollIntervalMs?: number } = {},
+	): AsyncGenerator<RunEvent, void, void> {
+		const run = this.repos.runs.require(id);
+		const tailOpts: TailOptions = { sinceSeq: 0 };
+		if (opts.signal) tailOpts.signal = opts.signal;
+		if (opts.pollIntervalMs !== undefined) tailOpts.pollIntervalMs = opts.pollIntervalMs;
+		for await (const event of tailBurrow(this.repos, run.burrowId, tailOpts)) {
+			if (event.runId === id) yield event;
+		}
+	}
+}
+
+/**
+ * Inbox namespace (SPEC §15.3) — thin wrapper over the underlying Inbox so
+ * the public client surface stays in one file.
+ */
+export class InboxClient {
+	private readonly inbox: Inbox;
+
+	constructor(repos: Repos) {
+		this.inbox = new Inbox(repos);
+	}
+
+	send(input: InboxSendInput): Message {
+		return this.inbox.send(input);
+	}
+
+	list(burrowId: string, filter: InboxListFilter = {}): Message[] {
+		return this.inbox.list(burrowId, filter);
+	}
+
+	pending(burrowId: string): Message[] {
+		return this.inbox.pending(burrowId);
+	}
+
+	cancel(messageId: string): void {
+		this.inbox.cancel(messageId);
+	}
+
+	count(burrowId: string, state?: MessageState): number {
+		return this.inbox.count(burrowId, state);
+	}
+
+	/** Underlying inbox for callers that need claimForRun (run-loop integration). */
+	get raw(): Inbox {
+		return this.inbox;
+	}
+}
+
+/**
+ * Events namespace (SPEC §15.4).
+ */
+export class EventsClient {
+	constructor(
+		private readonly repos: Repos,
+		private readonly bus: EventBus,
+	) {}
+
+	tail(filter: EventTailFilter = {}): AsyncGenerator<RunEvent, void, void> {
+		const kinds = filter.kinds && filter.kinds.length > 0 ? new Set(filter.kinds) : null;
+
+		if (filter.burrowId) {
+			const tailOpts: TailOptions = {
+				sinceSeq: typeof filter.since === "number" ? filter.since : 0,
+			};
+			if (filter.signal) tailOpts.signal = filter.signal;
+			if (filter.pollIntervalMs !== undefined) tailOpts.pollIntervalMs = filter.pollIntervalMs;
+			if (filter.once !== undefined) tailOpts.once = filter.once;
+			return filterKinds(tailBurrow(this.repos, filter.burrowId, tailOpts), kinds);
+		}
+
+		const tailOpts: TailAllOptions = {};
+		if (filter.burrowIds && filter.burrowIds.length > 0) tailOpts.burrowIds = filter.burrowIds;
+		if (filter.signal) tailOpts.signal = filter.signal;
+		if (filter.pollIntervalMs !== undefined) tailOpts.pollIntervalMs = filter.pollIntervalMs;
+		if (filter.once !== undefined) tailOpts.once = filter.once;
+		if (filter.since && typeof filter.since === "object") {
+			tailOpts.sinceSeq = filter.since;
+		}
+		return filterKinds(tailAll(this.repos, tailOpts), kinds);
+	}
+
+	/** Replay one burrow's persisted events; equivalent to `tail({ once: true })`. */
+	replay(burrowId: string, since = 0): AsyncGenerator<RunEvent, void, void> {
+		return tailBurrow(this.repos, burrowId, { sinceSeq: since, once: true });
+	}
+
+	/**
+	 * Subscribe to in-process pushes. The bus only delivers events published
+	 * within this Client's process — cross-process callers must use `tail()`
+	 * which polls SQLite.
+	 */
+	subscribe(burrowId: string, listener: (event: RunEvent) => void): Subscription {
+		return this.bus.subscribe(burrowId, listener);
+	}
+
+	subscribeAll(listener: (event: RunEvent) => void): Subscription {
+		return this.bus.subscribeAll(listener);
+	}
+
+	/** Underlying bus — exposed so the run-loop integration can publish. */
+	get rawBus(): EventBus {
+		return this.bus;
+	}
+}
+
+/**
+ * Agents namespace (SPEC §15.5).
+ */
+export class AgentsClient {
+	constructor(private readonly registry: AgentRegistry) {}
+
+	register(adapter: AgentRuntime | AgentConfig): AgentRuntime {
+		return this.registry.register(adapter);
+	}
+
+	list(): AgentRuntime[] {
+		return this.registry.list();
+	}
+
+	get(id: string): AgentRuntime | undefined {
+		return this.registry.get(id);
+	}
+
+	require(id: string): AgentRuntime {
+		return this.registry.require(id);
+	}
+
+	has(id: string): boolean {
+		return this.registry.has(id);
+	}
+
+	unregister(id: string): boolean {
+		return this.registry.unregister(id);
+	}
+
+	/** The underlying registry — required by `prepareTurnInjection`. */
+	get raw(): AgentRegistry {
+		return this.registry;
+	}
+}
+
+/**
+ * Public top-level client (SPEC §15).
+ */
+export class Client {
+	readonly burrows: BurrowsClient;
+	readonly runs: RunsClient;
+	readonly inbox: InboxClient;
+	readonly events: EventsClient;
+	readonly agents: AgentsClient;
+
+	private constructor(
+		readonly db: BurrowDb,
+		readonly repos: Repos,
+		readonly registry: AgentRegistry,
+		readonly bus: EventBus,
+		readonly paths: ReturnType<typeof resolvePaths>,
+		readonly logger: Logger,
+	) {
+		this.burrows = new BurrowsClient(this, repos);
+		this.runs = new RunsClient(repos);
+		this.inbox = new InboxClient(repos);
+		this.events = new EventsClient(repos, bus);
+		this.agents = new AgentsClient(registry);
+	}
+
+	static async open(opts: ClientOpenOptions = {}): Promise<Client> {
+		const paths = resolvePaths({
+			...(opts.dataDir !== undefined ? { dataDir: opts.dataDir } : {}),
+			...(opts.configDir !== undefined ? { configDir: opts.configDir } : {}),
+			...(opts.cacheDir !== undefined ? { cacheDir: opts.cacheDir } : {}),
+		});
+		const dbPath = opts.dbPath ?? paths.dbPath;
+		if (dbPath.length === 0) {
+			throw new ValidationError("Client.open requires a non-empty dbPath");
+		}
+		const db = await openDatabase({ path: dbPath });
+		const repos = createRepos(db);
+		const registry = new AgentRegistry();
+		const bus = new EventBus();
+		const logger = opts.logger ?? createLogger();
+		return new Client(db, repos, registry, bus, paths, logger);
+	}
+
+	async close(): Promise<void> {
+		this.bus.close();
+		this.db.close();
+	}
+}
+
+async function* filterKinds(
+	source: AsyncGenerator<RunEvent, void, void>,
+	kinds: Set<string> | null,
+): AsyncGenerator<RunEvent, void, void> {
+	if (!kinds) {
+		for await (const event of source) yield event;
+		return;
+	}
+	for await (const event of source) {
+		if (kinds.has(event.kind)) yield event;
+	}
+}
