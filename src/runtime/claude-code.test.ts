@@ -168,7 +168,7 @@ describe("claudeCodeRuntime.prepareWorkspace", () => {
 	});
 });
 
-describe("forwardClaudeHostCredentials", () => {
+describe("forwardClaudeHostCredentials (linux)", () => {
 	let workspaceDir: string;
 	let fakeHome: string;
 	beforeEach(async () => {
@@ -185,14 +185,46 @@ describe("forwardClaudeHostCredentials", () => {
 		await fs.mkdir(join(fakeHome, ".claude"), { recursive: true });
 		await writeFile(join(fakeHome, ".claude", ".credentials.json"), '{"token":"fake"}');
 
-		await forwardClaudeHostCredentials(workspaceDir, fakeHome);
+		await forwardClaudeHostCredentials(workspaceDir, { home: fakeHome, plat: "linux" });
 
 		const forwarded = await readFile(join(workspaceDir, ".claude", ".credentials.json"), "utf8");
 		expect(JSON.parse(forwarded)).toEqual({ token: "fake" });
 	});
 
 	test("is a no-op when the host has no ~/.claude/.credentials.json", async () => {
-		await forwardClaudeHostCredentials(workspaceDir, fakeHome);
+		await forwardClaudeHostCredentials(workspaceDir, { home: fakeHome, plat: "linux" });
+		const fs = await import("node:fs");
+		expect(fs.existsSync(join(workspaceDir, ".claude", ".credentials.json"))).toBe(false);
+	});
+});
+
+describe("forwardClaudeHostCredentials (darwin)", () => {
+	let workspaceDir: string;
+	beforeEach(async () => {
+		workspaceDir = await mkdtemp(join(tmpdir(), "burrow-claude-prep-"));
+	});
+	afterEach(async () => {
+		await rm(workspaceDir, { recursive: true, force: true });
+	});
+
+	test("extracts the Keychain blob and writes it as .credentials.json", async () => {
+		const blob = '{"claudeAiOauth":{"accessToken":"oat-x","refreshToken":"rt-y"}}';
+		await forwardClaudeHostCredentials(workspaceDir, {
+			plat: "darwin",
+			keychainReader: async (service) => {
+				expect(service).toBe("Claude Code-credentials");
+				return blob;
+			},
+		});
+		const written = await readFile(join(workspaceDir, ".claude", ".credentials.json"), "utf8");
+		expect(written).toBe(blob);
+	});
+
+	test("is a no-op when Keychain has no entry", async () => {
+		await forwardClaudeHostCredentials(workspaceDir, {
+			plat: "darwin",
+			keychainReader: async () => null,
+		});
 		const fs = await import("node:fs");
 		expect(fs.existsSync(join(workspaceDir, ".claude", ".credentials.json"))).toBe(false);
 	});
