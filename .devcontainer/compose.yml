@@ -41,8 +41,20 @@ services:
     # Bind-mount the project root (one level up from .devcontainer/) onto
     # /workspace. `consistency: cached` is a macOS Docker Desktop hint and a
     # no-op on Linux, so it's safe to leave on.
+    #
+    # Forward the host's GPG keyring into the container so signed commits
+    # work inside the dev shell. The project's session-close protocol
+    # (CLAUDE.md: `sd sync && git push`) calls `git commit`, which honors
+    # the host's `commit.gpgsign = true` via the bind-mounted /workspace/.git
+    # config chain — without ~/.gnupg the container has no key to sign with
+    # and the commit aborts with "cannot run gpg: No such file or directory"
+    # (gnupg itself is now installed in the image; see Dockerfile). On macOS
+    # the host gpg-agent socket lives inside ~/.gnupg so this single mount
+    # covers it; Linux contributors who want host-agent forwarding can add a
+    # compose override that also binds ${XDG_RUNTIME_DIR}/gnupg.
     volumes:
       - ../:/workspace:cached
+      - ${HOME}/.gnupg:/home/dev/.gnupg
     working_dir: /workspace
     # Persist the container so editors and `docker compose exec` can attach
     # without rebuilding.
