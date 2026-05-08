@@ -82,12 +82,48 @@ burrow events [--follow]                 # every active burrow, interleaved
 burrow watch [--json]                    # multi-burrow TUI dashboard (NDJSON snapshots with --json)
 
 burrow agents list / show / validate / add
+burrow serve [--socket PATH | --port N] [--no-auth]   # HTTP API daemon (see below)
 burrow ship [<id>] --target tarball|docker|fly
 ```
 
 Every command supports `--json` for machine-readable output and `--quiet`/`--verbose` for log level. Exit codes: `0` success, `1` generic, `2` not found, `3` invalid input, `4` runtime/sandbox error.
 
 Full design rationale, the `burrow.toml` schema, and the deferred V2 surface live in [SPEC.md](SPEC.md).
+
+## HTTP API (`burrow serve`)
+
+For driving Burrow from another process — the warren control plane, a future web UI, or any cross-process orchestrator — `burrow serve` exposes the Library API over HTTP. Routes mirror the `Client` namespaces 1:1 (`POST /burrows`, `GET /burrows/:id/events?follow=1`, …) so the in-process Library remains the source of truth. Streaming surfaces (`/events`, `/runs/:id/stream`, `/watch`) emit NDJSON over chunked HTTP byte-for-byte equal to the matching `--json` CLI output.
+
+```bash
+# unix socket (default; <cacheDir>/burrow.sock)
+$ BURROW_API_TOKEN=$(openssl rand -hex 32) burrow serve --json
+{"socket":"/Users/you/Library/Caches/burrow/burrow.sock","auth":"bearer"}
+
+$ curl --unix-socket /Users/you/Library/Caches/burrow/burrow.sock \
+       -H "Authorization: Bearer $BURROW_API_TOKEN" \
+       http://localhost/burrows
+
+# localhost TCP (opt-in; loopback only)
+$ burrow serve --port 4040 --json
+```
+
+From TypeScript, swap the in-process `Client` for `HttpClient` without touching call sites:
+
+```ts
+import { HttpClient } from '@os-eco/burrow-cli';
+
+const client = new HttpClient({
+  transport: { kind: 'unix', path: '/Users/you/Library/Caches/burrow/burrow.sock' },
+  token: process.env.BURROW_API_TOKEN,
+});
+
+const burrows = await client.burrows.list();
+for await (const evt of client.events.tail({ burrowId: burrows[0].id })) {
+  console.log(evt);
+}
+```
+
+Bearer auth from `BURROW_API_TOKEN` is required by default; `--no-auth` bypasses for loopback-only use. Single-user posture — multi-user is an explicit non-goal. See [SPEC §27](SPEC.md#27-http-api-burrow-serve) and `sd plan show pl-5b40` for the full design.
 
 ## Linux dev container
 

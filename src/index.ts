@@ -164,6 +164,25 @@ export {
 	type RunListFilter,
 	RunsClient,
 } from "./lib/client.ts";
+export {
+	type HttpAgentDetail,
+	type HttpAgentSummary,
+	HttpAgentsClient,
+	type HttpBurrowListFilter,
+	HttpBurrowsClient,
+	HttpClient,
+	HttpClientError,
+	type HttpClientOptions,
+	HttpEventsClient,
+	type HttpEventTailFilter,
+	HttpInboxClient,
+	type HttpInboxListFilter,
+	type HttpInboxSendInput,
+	type HttpRunCreateInput,
+	type HttpRunListFilter,
+	type HttpRunStreamOptions,
+	HttpRunsClient,
+} from "./lib/http-client.ts";
 export { createLogger, type Logger } from "./logging/logger.ts";
 export { buildBwrapArgv, SYSTEM_RO_MOUNTS } from "./provider/local/bwrap.ts";
 export { type RunSandboxedOptions, runSandboxed } from "./provider/local/sandbox.ts";
@@ -293,6 +312,7 @@ export {
 	type SecretStoreOptions,
 	type SecretStoreResult,
 } from "./secrets/store.ts";
+export type { ErrorEnvelope, Transport } from "./server/types.ts";
 export {
 	BUILT_IN_SHIP_TARGETS,
 	buildDockerArgv,

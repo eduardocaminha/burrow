@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`burrow serve` — HTTP API (SPEC §27).** Bun.serve thin layer over the
+  existing Library API; routes mirror the `Client` namespaces 1:1
+  (`POST /burrows`, `GET /burrows/:id/events?follow=1`,
+  `POST /burrows/:id/runs`, `GET /runs/:id/stream`, `GET /watch`,
+  …) so the in-process Library stays the source of truth. Streaming
+  surfaces emit NDJSON over chunked HTTP byte-for-byte equal to the
+  matching `--json` CLI output (`burrow events --json`,
+  `burrow watch --json`); `events?since=<seq>&follow=1` replays then
+  switches to live tail with no duplicates and no gaps. Unix socket is
+  the primary transport (default `<cacheDir>/burrow.sock`); localhost TCP
+  is opt-in via `--port [--host]`. Bearer auth from `BURROW_API_TOKEN`
+  (redacted from logs); `--no-auth` bypasses for loopback-only use.
+  SIGINT shuts down cleanly within 1s. Resolves plan `pl-5b40` (parent
+  seed `burrow-1d64`); SPEC §3.2's "No HTTP API server in V1" non-goal
+  is removed.
+- **`HttpClient` (`src/lib/http-client.ts`).** HTTP-backed mirror of
+  `Client` with the same five namespaces (burrows / runs / inbox /
+  events / agents) and identical method shapes. Rehydrates `Date`
+  fields and the `{ error: { code, message, hint } }` envelope back
+  into the matching `BurrowError` subclasses, so consumers (warren,
+  future UIs) can swap transports without touching call sites or
+  `instanceof` checks. Re-exported from `@os-eco/burrow-cli` alongside
+  `HttpClientOptions` and the `Transport` discriminated union.
+
 ## [0.2.0] - 2026-05-08
 
 ### Added

@@ -85,13 +85,12 @@ Burrow is built for the solo developer first — but it scales to teams of 50+ I
 ### 3.2 V1 Non-Goals
 
 - No remote `BurrowProvider` (fly/AWS) — interface lands in V1, second implementation does not.
-- No web UI, no `burrow watch` TUI, no `burrow serve` WebSocket — designed for, deferred to post-V1.
+- No web UI — designed for, deferred to post-V1. (`burrow watch` TUI shipped in 0.2.0; `burrow serve` HTTP API shipped in 0.3.0 — see §27.)
 - No multi-tenant auth or per-user RBAC.
 - No Docker, no container images.
 - No dependency on Anthropic's `sandbox-runtime` / `srt` — Burrow owns the bwrap and sandbox-exec wrapping directly.
 - No merge orchestration. Each task burrow produces a branch; the user (or an external agent) handles git work.
 - No snapshot / fork-of-running-state — workspace forking off the project burrow is supported, but in-memory snapshots are V2.
-- No HTTP API server in V1.
 - No Postgres, no Redis, no external services.
 
 ### 3.3 The seams that *do* survive
@@ -846,6 +845,22 @@ client.agents.list(): AgentRuntime[];
 client.agents.get(id): AgentRuntime | undefined;
 ```
 
+### 15.6 HTTP-backed `Client`
+
+`HttpClient` (`src/lib/http-client.ts`) mirrors the namespace surface above
+1:1 over a `burrow serve` connection (§27). Same method shapes, same return
+types, same error subclasses — consumers swap transports without touching
+call sites.
+
+```ts
+import { HttpClient } from '@os-eco/burrow';
+
+const client = new HttpClient({
+  transport: { kind: 'unix', path: '/run/burrow.sock' }, // or { kind: 'tcp', hostname, port }
+  token: process.env.BURROW_API_TOKEN,
+});
+```
+
 ---
 
 ## 16. CLI Surface
@@ -879,6 +894,10 @@ burrow events [--follow] [--burrow ID...] [--kind ...] [--json]
 burrow agents list
 burrow agents show <id>
 burrow agents validate <file>
+
+burrow serve [--socket PATH | --port N [--host HOST]] [--no-auth] [--json]
+                                               # Run the HTTP API (§27). Unix socket by
+                                               # default; localhost TCP opt-in via --port.
 
 burrow ship [<id>] [--target fly|docker|tarball|...] [--dry-run]
                                                # Build + deploy artifacts (uses provider).
@@ -1267,18 +1286,18 @@ Snapshots are best-effort live state, not a replay log. The SQLite event store r
 - `BurrowCard.eventTail` — capped (default 500, oldest-first within the window). `lastEventSeq` lets a reconnecting consumer (a future web UI) replay missed events from `events.seq > lastEventSeq`.
 - `BurrowCard.activeRun` — derived: most recent `running` run, falling back to most recent `queued` run, else `null`.
 
-### 26.5 `burrow serve` forward-compat
+### 26.5 `burrow serve` wire-shape lock
 
-When `burrow serve` lands (§27), it consumes `streamSnapshots()` directly and broadcasts each yielded `DashboardSnapshot` as NDJSON over chunked HTTP. The wire shape is identical to `burrow watch --json` so a single client library can target both. Until then, `burrow watch --json` is the canonical reference for the envelope; any `burrow serve` redesign that breaks `watch --json` is a breaking change and bumps `version`.
+`burrow serve` (§27) consumes `streamSnapshots()` directly and broadcasts each yielded `DashboardSnapshot` as NDJSON over chunked HTTP at `GET /watch` (`?once=1` collapses to the first snapshot for one-shot consumers). The wire shape is identical to `burrow watch --json` so a single client library targets both. Any change that breaks `watch --json` is a breaking change and bumps `version`.
 
 ---
 
 ## 27. HTTP API (`burrow serve`)
 
-Design and decomposition live in seeds, not here — the spec section is intentionally a pointer so the design record stays where the work happens.
+Shipped in 0.3.0 (plan `pl-5b40`, parent seed `burrow-1d64`). Design and decomposition live in seeds, not here — the spec section is intentionally a pointer so the design record stays where the work happens.
 
 - **Seed:** `burrow-1d64` — feature.
 - **Plan:** `pl-5b40` — context, approach, rejected alternatives, risks, acceptance criteria, and 8 child-seed implementation steps.
 - **View:** `sd plan show pl-5b40`.
 
-Motivation: the warren control plane (and any future external orchestrator) needs a stable, streaming, cross-process surface to drive burrow. Routes mirror the `Client` namespaces 1:1 so the Library API stays the source of truth. Unix socket is the primary transport (single-host / single-container deploy); localhost TCP is opt-in. Bearer auth from `BURROW_API_TOKEN` env. Single-user posture preserved — multi-user remains a non-goal. When this lands, §3.2's "No HTTP API server in V1" non-goal moves to "shipped in V1.x" and §26.5's forward-compat note resolves.
+Motivation: the warren control plane (and any future external orchestrator) needs a stable, streaming, cross-process surface to drive burrow. Routes mirror the `Client` namespaces 1:1 so the Library API (§15) stays the source of truth, and an HTTP-backed `HttpClient` mirror (§15.6, `src/lib/http-client.ts`) lets consumers swap transports without touching call sites. Streaming surfaces (events tail, run stream, watch snapshots) emit NDJSON over chunked HTTP byte-for-byte equal to the `--json` CLI output. Unix socket is the primary transport (single-host / single-container deploy); localhost TCP is opt-in via `--port`. Bearer auth from `BURROW_API_TOKEN` env; `--no-auth` bypasses for loopback-only use. Single-user posture preserved — multi-user remains a non-goal.
