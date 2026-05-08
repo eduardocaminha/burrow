@@ -57,6 +57,7 @@ import {
 	runSendCommand,
 	type SendCommandOptions,
 } from "./commands/send.ts";
+import { runServeCommand, type ServeCommandOptions } from "./commands/serve.ts";
 import { runShipCommand, type ShipCommandOptions, shipResultToJson } from "./commands/ship.ts";
 import { renderShowReport, runShowCommand, showResultToJson } from "./commands/show.ts";
 import { renderStopResult, runStopCommand } from "./commands/stop.ts";
@@ -623,6 +624,46 @@ program
 					ac.dispose();
 				}
 			});
+		},
+	);
+
+program
+	.command("serve")
+	.description(
+		"run the HTTP API server (unix socket by default; --port for TCP). SIGINT shuts down cleanly.",
+	)
+	.option("--socket <path>", "bind to a unix socket at <path> (default: <cacheDir>/burrow.sock)")
+	.option("--host <host>", "TCP host (defaults to 127.0.0.1; requires --port)")
+	.option("--port <port>", "TCP port (use 0 for an ephemeral port)")
+	.option("--no-auth", "skip bearer auth (loopback only — never use over public TCP)")
+	.option("--json", "emit a machine-readable JSON line on startup")
+	.action(
+		async (opts: {
+			socket?: string;
+			host?: string;
+			port?: string;
+			auth?: boolean;
+			json?: boolean;
+		}) => {
+			const ac = makeAbortController();
+			try {
+				await withClient(async (client) => {
+					const serveOpts: ServeCommandOptions = {};
+					if (opts.socket !== undefined) serveOpts.socket = opts.socket;
+					if (opts.host !== undefined) serveOpts.host = opts.host;
+					if (opts.port !== undefined) serveOpts.port = opts.port;
+					if (opts.auth === false) serveOpts.noAuth = true;
+					if (opts.json !== undefined) serveOpts.json = opts.json;
+					await runServeCommand({
+						client,
+						options: serveOpts,
+						signal: ac.controller.signal,
+						stdout: process.stdout,
+					});
+				});
+			} finally {
+				ac.dispose();
+			}
 		},
 	);
 
