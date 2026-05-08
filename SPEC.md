@@ -2,8 +2,7 @@
 
 > Each agent digs its own contained space. Coding work happens in burrows, not on the host.
 
-**Status:** Design phase, V1 spec.
-**Last updated:** 2026-05-07.
+**Status:** V1 design record (frozen). Forward-looking direction lives in [ROADMAP.md](ROADMAP.md).
 **CLI:** `burrow` / `bw`.
 **Package:** `@os-eco/burrow-cli`.
 
@@ -1173,17 +1172,15 @@ The last bullet is the load-bearing test of the architecture.
 
 ---
 
-## 24. Post-V1 Roadmap
+## 24. Post-V1 direction
 
-These are explicitly designed *for* but not built *in* V1:
+Forward-looking items — `FlyProvider`, `burrow snapshot`/`burrow restore`,
+toolchain auto-install, ship-target plugins, overstory/mycelium substrate
+integration, and the deploy-posture decision — live in [ROADMAP.md](ROADMAP.md)
+as `R-NN` items.
 
-- **`burrow watch` (TUI dashboard).** Multi-burrow live view, like `ov dashboard`. First post-V1 feature.
-- **`burrow serve` (WS + REST server).** Powers external UIs (a future multica-style web frontend, team monitoring, CI integrations). Second post-V1 feature.
-- **`FlyProvider` (and friends).** Remote burrows on Fly machines. Same CLI, same APIs.
-- **`burrow snapshot` / `burrow restore`.** Versioned workspace snapshots for time-travel debugging.
-- **Toolchain auto-install (mise / asdf integration).** No manual host setup.
-- **`burrow ship` target plugins.** Additional deploy targets beyond fly/docker/tarball.
-- **Substrate integration with Overstory and Mycelium.** Eventually, those tools dispatch agents into burrows instead of tmux. Burrow's CLI/API stays unchanged; consumption is purely additive.
+`burrow watch` (TUI, 0.2.0) and `burrow serve` (HTTP API, 0.3.0) shipped post-V1
+under §26 / §27 of this document; ROADMAP.md tracks them in *Recently shipped*.
 
 Pre-emptively *out of scope* even post-V1, unless the design changes:
 
@@ -1194,15 +1191,24 @@ Pre-emptively *out of scope* even post-V1, unless the design changes:
 
 ---
 
-## 25. Open Questions
+## 25. Open questions (resolved)
 
-These need a decision before or during early implementation:
+The five V1 open questions have all been settled in code or in
+[ROADMAP.md](ROADMAP.md)'s *Decisions already made*:
 
-1. **Brand color.** Forest palette has open slots; pick a tone that reads "warm, contained, earthy."
-2. **Network policy enforcement on Linux.** Userspace HTTP proxy vs. nftables rules. The latter is more correct; the former is more portable across distros. Probably ship userspace proxy first, nftables as opt-in.
-3. **Toolchain mounting.** Mount specific binary paths only, or the entire `$PATH` ancestry? The first is safer; the second is more compatible with toolchain shims (mise, asdf, fnm). V1 likely mounts the resolved binary plus its lib dir; full `$PATH` is opt-in via `burrow.toml: sandbox.toolchain_mode = "shim-aware"`.
-4. **Default `burrow up` behavior outside a project.** Refuse, prompt for `burrow init`, or create an "ephemeral scratch burrow" with no project context? Probably refuse + suggest `burrow init`.
-5. **`burrow chat` when an agent doesn't support spawn-per-turn.** Disabled command, or graceful "messages will queue for the next run"? The latter is friendlier.
+1. **Brand color.** Settled at brand-pass time; see the os-eco brand standards
+   referenced in §16.1.
+2. **Network policy enforcement on Linux.** Userspace HTTP proxy shipped
+   (mulch decision `mx-d6a44f`); nftables remains a future opt-in.
+3. **Toolchain mounting.** Resolved-binary-plus-lib-dir is the default;
+   `[sandbox] read_only_paths` is the explicit escape hatch (mulch
+   `mx-25becd` / `mx-b673da`). The previously-floated
+   `sandbox.toolchain_mode = "shim-aware"` knob proved unnecessary.
+4. **Default `burrow up` behavior outside a project.** Settled in `up.ts` —
+   refuse with a hint pointing at `burrow init`.
+5. **`burrow chat` when an agent doesn't support spawn-per-turn.** Settled —
+   messages queue for the next run, with the CLI surfacing this clearly
+   (SPEC §13.3).
 
 ---
 

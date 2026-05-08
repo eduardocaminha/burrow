@@ -1,6 +1,6 @@
 # Burrow
 
-OS-isolated sandbox runtime for coding agents. See [SPEC.md](SPEC.md) for the V1 design. Source has not landed yet — these rituals apply once it does.
+OS-isolated sandbox runtime for coding agents. [SPEC.md](SPEC.md) is the frozen V1 design record; [ROADMAP.md](ROADMAP.md) is the punch list of forward-looking items. New deferred decisions out of design discussions land in ROADMAP.md as `R-NN` items rather than as standalone informational seeds.
 
 ## Tech Stack
 
