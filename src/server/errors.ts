@@ -48,7 +48,7 @@ export function notImplemented(route: string): RenderedError {
 			error: {
 				code: "not_implemented",
 				message: `route ${route} is scaffolded but has no handler yet`,
-				hint: "no Client.burrows.create analogue exists in src/lib/client.ts",
+				hint: "router-only scaffolds (Client=null) and unknown method/pattern pairs land here",
 			},
 		},
 	};

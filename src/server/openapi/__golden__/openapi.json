@@ -317,6 +317,43 @@
         ],
         "additionalProperties": false
       },
+      "CreateBurrowBody": {
+        "type": "object",
+        "properties": {
+          "projectRoot": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Absolute host path to the project root."
+          },
+          "name": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "baseBranch": {
+            "type": "string"
+          },
+          "originUrl": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string",
+            "enum": [
+              "none",
+              "restricted",
+              "open"
+            ]
+          },
+          "provider": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot"
+        ],
+        "additionalProperties": false
+      },
       "CreateRunBody": {
         "type": "object",
         "properties": {
@@ -1042,13 +1079,33 @@
       },
       "post": {
         "operationId": "createBurrow",
-        "summary": "Create a burrow. NOT IMPLEMENTED in V1 — `Client.burrows.create` doesn't exist yet; use `burrow up` from a project root or the lower-level repo APIs. Returns 501.",
+        "summary": "Provision a project burrow (SPEC §15.1, §16). Loads `burrow.toml` from `projectRoot`, runs doctor, materializes the workspace worktree, and inserts the burrow row with its resolved sandbox profile. Returns 201 with the new `Burrow`.",
         "tags": [
           "burrows"
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBurrowBody"
+              }
+            }
+          }
+        },
         "responses": {
-          "501": {
-            "description": "Error envelope (`not_implemented`).",
+          "201": {
+            "description": "The provisioned burrow.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Burrow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error envelope (`validation_error`).",
             "content": {
               "application/json": {
                 "schema": {

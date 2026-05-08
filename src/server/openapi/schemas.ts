@@ -25,6 +25,7 @@ import {
 	MESSAGE_STATES,
 	RUN_STATES,
 } from "../../db/schema.ts";
+import { NETWORK_POLICIES } from "../../provider/types.ts";
 
 export const componentRegistry = z.registry<{ id: string }>();
 
@@ -248,6 +249,19 @@ export const HealthResponseSchema = component("HealthResponse", z.object({ ok: z
 /* ----------------------------------------------------------------------- */
 /* Request bodies                                                           */
 /* ----------------------------------------------------------------------- */
+
+export const CreateBurrowBodySchema = component(
+	"CreateBurrowBody",
+	z.object({
+		projectRoot: z.string().min(1).describe("Absolute host path to the project root."),
+		name: z.string().optional(),
+		branch: z.string().optional(),
+		baseBranch: z.string().optional(),
+		originUrl: z.string().optional(),
+		network: z.enum(NETWORK_POLICIES).optional(),
+		provider: z.string().optional(),
+	}),
+);
 
 export const CreateRunBodySchema = component(
 	"CreateRunBody",

@@ -18,6 +18,7 @@
  *   - Tests open Client.open({ dataDir, configDir }) against tmp dirs.
  */
 
+import { runUpCommand, type UpCommandInput } from "../cli/commands/up.ts";
 import { resolvePaths } from "../config/paths.ts";
 import { ValidationError } from "../core/errors.ts";
 import type {
@@ -38,6 +39,7 @@ import { type TailAllOptions, type TailOptions, tailAll, tailBurrow } from "../e
 import { EventBus, type Subscription } from "../events/tail.ts";
 import { Inbox } from "../inbox/inbox.ts";
 import { createLogger, type Logger } from "../logging/logger.ts";
+import type { NetworkPolicy } from "../provider/types.ts";
 import { AgentRegistry } from "../runtime/registry.ts";
 import type { AgentRuntime } from "../runtime/runtime.ts";
 import type { AgentConfig } from "../schemas/agent-config.ts";
@@ -82,6 +84,32 @@ export interface RunCreateInput {
 	metadata?: unknown;
 }
 
+/**
+ * Public surface for `client.burrows.up()` (SPEC §15.1). Mirrors the wire
+ * shape accepted by `POST /burrows` so warren and other HTTP consumers can
+ * pass the same fields they post over the wire. The heavy lifting
+ * (burrow.toml load, doctor, secrets, worktree materialization, sandbox
+ * profile build) lives in `runUpCommand` — this is a thin pass-through.
+ */
+export interface BurrowUpInput {
+	projectRoot: string;
+	name?: string;
+	branch?: string;
+	baseBranch?: string;
+	originUrl?: string;
+	network?: NetworkPolicy;
+	provider?: string;
+}
+
+/**
+ * Test seams forwarded into `runUpCommand`. Production callers leave this
+ * unset; tests pass a fake materializer + `skipDoctor: true` so the up flow
+ * doesn't shell out to git or the host toolchain. Set via
+ * `BurrowsClient.setUpOverrides()` because `up()` is reached through the
+ * HTTP handler which has no body channel for these.
+ */
+export type BurrowUpOverrides = Omit<UpCommandInput, "client" | "projectRoot" | "options">;
+
 export interface EventTailFilter {
 	burrowId?: string;
 	burrowIds?: string[];
@@ -96,10 +124,46 @@ export interface EventTailFilter {
  * Burrows namespace (SPEC §15.1).
  */
 export class BurrowsClient {
+	private upOverrides: BurrowUpOverrides | null = null;
+
 	constructor(
 		private readonly client: Client,
 		private readonly repos: Repos,
 	) {}
+
+	/**
+	 * Provision a project burrow (SPEC §15.1, §16 `burrow up`). Loads
+	 * `burrow.toml` from `projectRoot`, runs `burrow doctor`, resolves
+	 * env/secrets, materializes the workspace worktree, and inserts the
+	 * burrow row with the resolved sandbox profile. Returns the freshly
+	 * created `Burrow`.
+	 *
+	 * Overrides for tests (materializer, skipDoctor, …) are picked up from
+	 * `setUpOverrides()`. The HTTP handler in `src/server/handlers.ts` does
+	 * not expose those fields on the wire — the seam exists so handler tests
+	 * can drive a deterministic up flow without git or doctor side effects.
+	 */
+	async up(input: BurrowUpInput): Promise<Burrow> {
+		const options: UpCommandInput["options"] = {};
+		if (input.name !== undefined) options.name = input.name;
+		if (input.branch !== undefined) options.branch = input.branch;
+		if (input.baseBranch !== undefined) options.baseBranch = input.baseBranch;
+		if (input.originUrl !== undefined) options.originUrl = input.originUrl;
+		if (input.network !== undefined) options.network = input.network;
+		if (input.provider !== undefined) options.provider = input.provider;
+		const result = await runUpCommand({
+			client: this.client,
+			projectRoot: input.projectRoot,
+			options,
+			...(this.upOverrides ?? {}),
+		});
+		return result.burrow;
+	}
+
+	/** Test seam — see `BurrowUpOverrides`. Set to `null` to clear. */
+	setUpOverrides(overrides: BurrowUpOverrides | null): void {
+		this.upOverrides = overrides;
+	}
 
 	list(filter: BurrowListFilter = {}): Burrow[] {
 		let rows = filter.state

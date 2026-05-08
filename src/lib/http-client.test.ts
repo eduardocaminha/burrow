@@ -157,6 +157,29 @@ describe("HttpClient (TCP transport)", () => {
 		expect(client.burrows.tryGet(burrow.id)?.state).toBe("destroyed");
 	});
 
+	test("burrows.up provisions a project burrow with rehydrated dates", async () => {
+		const projectRoot = mkTmp("burrow-httpclient-proj-");
+		client.burrows.setUpOverrides({
+			skipDoctor: true,
+			materializer: async (opts) => ({
+				workspacePath: opts.workspacePath,
+				source: { kind: "worktree", branch: opts.branch, hostClonePath: "/host" },
+				identity: null,
+			}),
+		});
+		const burrow = await http.burrows.up({
+			projectRoot,
+			name: "web",
+			branch: "feature/x",
+		});
+		expect(burrow.id.startsWith("bur_")).toBe(true);
+		expect(burrow.kind).toBe("project");
+		expect(burrow.name).toBe("web");
+		expect(burrow.createdAt).toBeInstanceOf(Date);
+		expect(client.burrows.get(burrow.id).id).toBe(burrow.id);
+		rmSync(projectRoot, { recursive: true, force: true });
+	});
+
 	/* ------------------------------------------------------------------- */
 	/* Runs                                                                */
 	/* ------------------------------------------------------------------- */

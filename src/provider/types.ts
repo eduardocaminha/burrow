@@ -4,7 +4,8 @@
  * the BurrowProvider interface that consumes them lands in a later phase.
  */
 
-export type NetworkPolicy = "none" | "restricted" | "open";
+export const NETWORK_POLICIES = ["none", "restricted", "open"] as const;
+export type NetworkPolicy = (typeof NETWORK_POLICIES)[number];
 
 export interface SandboxProfile {
 	/** Workspace root, bound read-write inside the sandbox. */

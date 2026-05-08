@@ -51,6 +51,7 @@ import type {
 } from "../core/types.ts";
 import type { DestroyBurrowResult } from "../events/destroy.ts";
 import type { EventEnvelope } from "../events/render.ts";
+import type { NetworkPolicy } from "../provider/types.ts";
 import type { InstallCheckResult } from "../runtime/runtime.ts";
 import type { ErrorEnvelope, Transport } from "../server/types.ts";
 
@@ -91,6 +92,16 @@ export interface HttpRunCreateInput {
 	agentId: string;
 	prompt: string;
 	metadata?: unknown;
+}
+
+export interface HttpBurrowUpInput {
+	projectRoot: string;
+	name?: string;
+	branch?: string;
+	baseBranch?: string;
+	originUrl?: string;
+	network?: NetworkPolicy;
+	provider?: string;
 }
 
 export interface HttpEventTailFilter {
@@ -225,6 +236,22 @@ class HttpTransportClient {
  */
 export class HttpBurrowsClient {
 	constructor(private readonly transport: HttpTransportClient) {}
+
+	async up(input: HttpBurrowUpInput): Promise<Burrow> {
+		const body: Record<string, unknown> = { projectRoot: input.projectRoot };
+		if (input.name !== undefined) body.name = input.name;
+		if (input.branch !== undefined) body.branch = input.branch;
+		if (input.baseBranch !== undefined) body.baseBranch = input.baseBranch;
+		if (input.originUrl !== undefined) body.originUrl = input.originUrl;
+		if (input.network !== undefined) body.network = input.network;
+		if (input.provider !== undefined) body.provider = input.provider;
+		const row = await this.transport.request<unknown>({
+			method: "POST",
+			path: "/burrows",
+			jsonBody: body,
+		});
+		return reviveBurrow(row);
+	}
 
 	async list(filter: HttpBurrowListFilter = {}): Promise<Burrow[]> {
 		const query = new URLSearchParams();

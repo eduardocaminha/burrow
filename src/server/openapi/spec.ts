@@ -18,6 +18,7 @@ import { VERSION } from "../../index.ts";
 import {
 	AgentDetailSchema,
 	BurrowSchema,
+	CreateBurrowBodySchema,
 	CreateRunBodySchema,
 	componentRegistry,
 	DashboardSnapshotSchema,
@@ -232,10 +233,16 @@ const OPERATIONS: readonly PathOperation[] = [
 		op: {
 			operationId: "createBurrow",
 			summary:
-				"Create a burrow. NOT IMPLEMENTED in V1 — `Client.burrows.create` doesn't exist yet; use `burrow up` from a project root or the lower-level repo APIs. Returns 501.",
+				"Provision a project burrow (SPEC §15.1, §16). Loads `burrow.toml` from `projectRoot`, runs doctor, materializes the workspace worktree, and inserts the burrow row with its resolved sandbox profile. Returns 201 with the new `Burrow`.",
 			tags: ["burrows"],
+			requestBody: { schemaName: "CreateBurrowBody" },
 			responses: {
-				"501": errorResponse("not_implemented"),
+				"201": {
+					description: "The provisioned burrow.",
+					contentType: "application/json",
+					schemaName: "Burrow",
+				},
+				"400": errorResponse("validation_error"),
 			},
 		},
 	},
@@ -668,6 +675,7 @@ function registrySources(): readonly z.ZodType[] {
 		DestroyBurrowResultSchema,
 		ErrorEnvelopeSchema,
 		HealthResponseSchema,
+		CreateBurrowBodySchema,
 		CreateRunBodySchema,
 		SendInboxBodySchema,
 	];

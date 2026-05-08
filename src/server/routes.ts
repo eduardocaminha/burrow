@@ -1,8 +1,7 @@
 /**
- * Route table for `burrow serve`. After pl-5b40 step 3, the only route
- * still returning 501 NotImplemented is POST /burrows — there's no
- * `Client.burrows.create` analogue yet. Everything else (CRUD + the three
- * streaming surfaces) is wired to a real handler via `handlerFor`.
+ * Route table for `burrow serve`. Every route in the canonical table is
+ * wired to a real handler via `handlerFor`; the 501 stub is now reserved
+ * for router-only tests (`buildRoutes(null)`) and out-of-table fallbacks.
  *
  * The shape and ordering here is the contract: tests in step 7 lock the
  * route list against this file.
@@ -26,8 +25,8 @@ import type { Route, RouteHandler } from "./types.ts";
 /**
  * Build the canonical route table. When `client` is null (router-only tests
  * and the existing scaffold tests) every route returns 501; when a real
- * `Client` is provided, implemented routes get bound handlers and the rest
- * fall back to the 501 stub (POST /burrows + the streaming surfaces).
+ * `Client` is provided, every canonical route now has a bound handler and
+ * the 501 stub only fires for unknown method/pattern pairs.
  */
 export function buildRoutes(client: Client | null): Route[] {
 	return ROUTE_TABLE.map((entry) => {

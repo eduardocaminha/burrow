@@ -282,9 +282,10 @@ describe("burrow serve subprocess (TCP, no auth)", () => {
 	});
 
 	test("HTTP-backed Client + in-process Client share the same destroy outcome", async () => {
-		// Acceptance #6: full HTTP-driven loop touches every namespace. The CLI
-		// `client.burrows.create` analogue isn't exposed yet (POST /burrows is
-		// 501), so create stays in-process; everything else flows over HTTP.
+		// Acceptance #6: full HTTP-driven loop touches every namespace. The
+		// HTTP-backed `client.burrows.up` is exercised in `http-client.test.ts`;
+		// here we seed in-process to keep this scenario focused on the
+		// destroy/replay/inbox path.
 		const burrow = seedBurrow(client);
 		await http.inbox.send({ burrowId: burrow.id, body: "before destroy" });
 		appendEvent(client, burrow.id, "tool_use", { tool: "Bash" }, 1000);

@@ -37,12 +37,14 @@ import {
 } from "../db/schema.ts";
 import { eventToEnvelope } from "../events/render.ts";
 import type {
+	BurrowUpInput,
 	Client,
 	EventTailFilter,
 	InboxListFilter,
 	RunCreateInput,
 	RunListFilter,
 } from "../lib/client.ts";
+import { NETWORK_POLICIES, type NetworkPolicy } from "../provider/types.ts";
 import type { AgentRuntime, InstallCheckResult } from "../runtime/runtime.ts";
 import { jsonResponse, ndjsonResponse } from "./response.ts";
 import type { RouteContext, RouteHandler } from "./types.ts";
@@ -221,6 +223,37 @@ function resumeBurrow(client: Client): RouteHandler {
 	return (ctx) => {
 		const id = requireParam(ctx, "id");
 		return jsonResponse(200, client.burrows.resume(id));
+	};
+}
+
+/**
+ * `POST /burrows` — provision a project burrow (SPEC §15.1, §16). The body
+ * mirrors `BurrowUpInput`: `projectRoot` is required, the rest are optional
+ * overrides for `burrow.toml` defaults. Heavy lifting (doctor, secrets,
+ * worktree, sandbox profile build) lives in `client.burrows.up()`; we only
+ * shape the wire-side validation here. Returns 201 with the new `Burrow`.
+ */
+function createBurrow(client: Client): RouteHandler {
+	return async (ctx) => {
+		const body = await readJsonBody(ctx);
+		const input: BurrowUpInput = {
+			projectRoot: requireString(body, "projectRoot"),
+		};
+		const name = optionalString(body, "name");
+		if (name !== undefined) input.name = name;
+		const branch = optionalString(body, "branch");
+		if (branch !== undefined) input.branch = branch;
+		const baseBranch = optionalString(body, "baseBranch");
+		if (baseBranch !== undefined) input.baseBranch = baseBranch;
+		const originUrl = optionalString(body, "originUrl");
+		if (originUrl !== undefined) input.originUrl = originUrl;
+		const networkRaw = optionalString(body, "network");
+		const network = parseEnum<NetworkPolicy>(networkRaw ?? null, "network", NETWORK_POLICIES);
+		if (network !== undefined) input.network = network;
+		const provider = optionalString(body, "provider");
+		if (provider !== undefined) input.provider = provider;
+		const burrow = await client.burrows.up(input);
+		return jsonResponse(201, burrow);
 	};
 }
 
@@ -562,16 +595,18 @@ function watchHandler(client: Client): RouteHandler {
 /* ----------------------------------------------------------------------- */
 
 /**
- * Resolve a method+pattern pair to its bound handler. Returns null for
- * the one route still scaffolded as 501 (POST /burrows — no
- * `Client.burrows.create` analogue yet); callers (routes.ts) fall back to
- * the 501 stub for that.
+ * Resolve a method+pattern pair to its bound handler. Every route in the
+ * canonical table now has a real handler; `null` is reserved for unknown
+ * method/pattern pairs (routes.ts falls back to the 501 stub for those, so
+ * an out-of-table call still rejects cleanly).
  */
 export function handlerFor(client: Client, method: string, pattern: string): RouteHandler | null {
 	const key = `${method} ${pattern}`;
 	switch (key) {
 		case "GET /burrows":
 			return listBurrows(client);
+		case "POST /burrows":
+			return createBurrow(client);
 		case "GET /burrows/:id":
 			return getBurrow(client);
 		case "DELETE /burrows/:id":

@@ -158,15 +158,67 @@ describe("server handlers", () => {
 		expect(row?.state).toBe("destroyed");
 	});
 
-	test("POST /burrows still scaffolded as 501 (no Client.burrows.create)", async () => {
+	test("POST /burrows provisions a project burrow (201)", async () => {
+		const projectRoot = mkTmp();
+		client.burrows.setUpOverrides({
+			skipDoctor: true,
+			materializer: async (opts) => ({
+				workspacePath: opts.workspacePath,
+				source: { kind: "worktree", branch: opts.branch, hostClonePath: "/host" },
+				identity: null,
+			}),
+		});
 		const res = await fetch(`${handle.url}/burrows`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ kind: "project" }),
+			body: JSON.stringify({
+				projectRoot,
+				name: "web",
+				branch: "feature/x",
+				network: "none",
+			}),
 		});
-		expect(res.status).toBe(501);
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as Burrow;
+		expect(body.id.startsWith("bur_")).toBe(true);
+		expect(body.kind).toBe("project");
+		expect(body.name).toBe("web");
+		expect(body.branch).toBe("feature/x");
+		expect(body.projectRoot).toBe(projectRoot);
+		// Persisted row matches what came back over the wire.
+		expect(client.burrows.get(body.id).id).toBe(body.id);
+		rmSync(projectRoot, { recursive: true, force: true });
+	});
+
+	test("POST /burrows without projectRoot → 400", async () => {
+		const res = await fetch(`${handle.url}/burrows`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ name: "web" }),
+		});
+		expect(res.status).toBe(400);
 		const body = (await res.json()) as { error: { code: string } };
-		expect(body.error.code).toBe("not_implemented");
+		expect(body.error.code).toBe("validation_error");
+	});
+
+	test("POST /burrows with unknown network → 400", async () => {
+		const res = await fetch(`${handle.url}/burrows`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ projectRoot: "/repos/web", network: "bogus" }),
+		});
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: { code: string } };
+		expect(body.error.code).toBe("validation_error");
+	});
+
+	test("POST /burrows with non-JSON body → 400", async () => {
+		const res = await fetch(`${handle.url}/burrows`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: "not json",
+		});
+		expect(res.status).toBe(400);
 	});
 
 	/* ------------------------------------------------------------------- */
