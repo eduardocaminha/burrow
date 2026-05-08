@@ -37,11 +37,18 @@ New items follow this shape so the format doesn't drift:
 ---
 
 ## R-01 — Prefer burrow-on-host over burrow-in-pod (userns nesting)
-Status: [proposed]
+Status: [shipped]
 Depends on: —
-Unlocks: deploy guides in greenhouse / overstory; R-02 (FlyProvider deploy posture)
+Unlocks: R-02 (FlyProvider deploy posture); deploy guides in warren / overstory link to burrow's [DEPLOY.md](DEPLOY.md)
 
-**Problem.** For deploying burrow swarms in the cloud, bwrap needs unprivileged
+**Resolution.** Lives at [DEPLOY.md](DEPLOY.md): on-host is the production
+default; in-pod is acceptable for self-managed / single-tenant / dev-CI
+postures with the four-flag bwrap recipe, not acceptable in multi-tenant
+managed K8s/ECS/Cloud Run. Reference systemd unit + Fly Machine config
+included. Both open questions resolved (guide lives in burrow; reference
+configs ship inline).
+
+**Original problem (preserved for context).** For deploying burrow swarms in the cloud, bwrap needs unprivileged
 user namespaces. On modern Linux hosts that works directly. Inside a managed
 container (K8s, ECS Fargate, Cloud Run), the outer runtime's default security
 profile typically blocks userns creation:
@@ -74,12 +81,14 @@ fine. burrow-on-host is the right call for multi-tenant managed K8s/ECS/Cloud
 Run, anywhere admission policy is restrictive and not yours to change, and as
 the production-swarm default.
 
-**Open questions.**
-- Where the deploy guide actually lives once written — burrow/DEPLOY.md,
-  greenhouse, or overstory.
-- Whether to ship a reference systemd unit / Fly Machine config alongside.
+**Open questions (resolved).**
+- ~~Where the deploy guide actually lives.~~ → `burrow/DEPLOY.md`. Warren,
+  overstory, greenhouse cross-link in.
+- ~~Reference systemd unit / Fly Machine config alongside.~~ → both
+  included inline in DEPLOY.md.
 
 **Related.**
+- burrow-9986 (executed R-01 — wrote DEPLOY.md, this status flip)
 - burrow-7ba7 (closed into this; was the standalone decision record)
 - burrow-fbdf (closed; required Anthropic upstream action)
 - burrow-0fab (parent decision discussion)
@@ -88,7 +97,7 @@ the production-swarm default.
 
 ## R-02 — FlyProvider (and other remote `BurrowProvider`s)
 Status: [proposed]
-Depends on: R-01 (deploy posture informs single-machine vs in-pod targeting)
+Depends on: R-01 (shipped — deploy posture in [DEPLOY.md](DEPLOY.md): Fly Machines = on-host posture, no four-flag overrides needed)
 Unlocks: cloud-deployed burrow swarms; the load-bearing test of the
 `BurrowProvider` seam (SPEC §23)
 
@@ -287,6 +296,12 @@ Threads that run through multiple items.
 Cross-references to closed work that maps onto post-V1 direction. Tracked here
 so subsequent revisions know what's already off the punch list.
 
+- **R-01 deploy posture — [DEPLOY.md](DEPLOY.md)** (burrow-9986). On-host is
+  the production default; in-pod is acceptable for self-managed / single-tenant
+  / dev-CI postures with the four-flag bwrap recipe (`mx-94901b`, `mx-c085ba`).
+  Reference systemd unit + Fly Machine config + Caddy reverse-proxy snippet
+  included. Unblocks R-02 substrate decision (Fly Machines = on-host) and gives
+  warren / overstory / greenhouse a single canonical link for deploy guides.
 - **`burrow watch` (TUI dashboard) — 0.2.0.** Multi-burrow live view; pure
   `DashboardSnapshot` builder + reducer + renderer with golden tests.
   Self-describes via SPEC §26's additive-only versioning lock. Seeds:
@@ -324,14 +339,14 @@ so subsequent revisions know what's already off the punch list.
 
 A first cut at order of attack — not committed:
 
-1. **R-01** (deploy posture) — informational decision record; lands first
-   because R-02 needs it before picking a substrate.
+1. ~~**R-01** (deploy posture)~~ — shipped, see [DEPLOY.md](DEPLOY.md).
 2. **R-02** (FlyProvider) — first remote `BurrowProvider`; the seam's
-   load-bearing test.
+   load-bearing test. Fly Machines map to on-host posture per R-01.
 3. **R-04** (toolchain auto-install) — orthogonal to remote work; valuable
    for solo and team onboarding without blocking R-02.
 4. **R-06** (overstory/mycelium integration) — once R-02 is shipped, upstream
-   tools have a substrate worth migrating to.
+   tools have a substrate worth migrating to. Warren is already proving the
+   pattern via burrow's HTTP API + `HttpClient`.
 5. **R-05** (ship target plugins) — incremental once `burrow ship`'s interface
    is exercised by a fourth, user-supplied target.
 6. **R-03** (snapshot / restore) — defer until V1 + R-02 are stable enough

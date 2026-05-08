@@ -123,7 +123,7 @@ for await (const evt of client.events.tail({ burrowId: burrows[0].id })) {
 }
 ```
 
-Bearer auth from `BURROW_API_TOKEN` is required by default; `--no-auth` bypasses for loopback-only use. Single-user posture — multi-user is an explicit non-goal. See [SPEC §27](SPEC.md#27-http-api-burrow-serve) and `sd plan show pl-5b40` for the full design.
+Bearer auth from `BURROW_API_TOKEN` is required by default; `--no-auth` bypasses for loopback-only use. Single-user posture — multi-user is an explicit non-goal. See [SPEC §27](SPEC.md#27-http-api-burrow-serve) and `sd plan show pl-5b40` for the full design. For running `burrow serve` as a long-lived daemon (systemd unit, Fly Machine, in-container with the four bwrap flags), see [DEPLOY.md](DEPLOY.md).
 
 The server self-describes via an OpenAPI 3.1 document at `GET /openapi.json` (auth-required) so external consumers can codegen typed clients without hand-rolling against the wire format. Point a browser at `GET /openapi.html` (auth-exempt) for a Scalar-rendered API reference.
 
