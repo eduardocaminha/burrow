@@ -52,9 +52,17 @@ services:
     # the host gpg-agent socket lives inside ~/.gnupg so this single mount
     # covers it; Linux contributors who want host-agent forwarding can add a
     # compose override that also binds ${XDG_RUNTIME_DIR}/gnupg.
+    #
+    # Forward the host's claude-code auth state (~/.claude directory, plus
+    # the ~/.claude.json config file at home root) so re-auth isn't needed
+    # on every container rebuild. Tokens auto-refresh on use, so concurrent
+    # host + container claude-code can race on the file (last writer wins) —
+    # in practice it's fine because refreshes are idempotent.
     volumes:
       - ../:/workspace:cached
       - ${HOME}/.gnupg:/home/dev/.gnupg
+      - ${HOME}/.claude:/home/dev/.claude
+      - ${HOME}/.claude.json:/home/dev/.claude.json
     working_dir: /workspace
     # Persist the container so editors and `docker compose exec` can attach
     # without rebuilding.
