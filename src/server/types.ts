@@ -12,6 +12,7 @@
  */
 
 import type { Logger } from "../logging/logger.ts";
+import type { AuthProvider } from "./auth.ts";
 
 /**
  * Error envelope rendered for every non-2xx response. Mirrors the shape of
@@ -59,11 +60,28 @@ export interface Route {
 	readonly handler: RouteHandler;
 }
 
+/**
+ * Wire-level binding for `burrow serve`. Unix socket is the canonical
+ * single-host / single-container deploy (filesystem-permission-controlled,
+ * no port allocation); localhost TCP is the opt-in alternative for
+ * cross-container reach. Anything beyond loopback is out of V1 scope.
+ */
+export type Transport =
+	| { readonly kind: "unix"; readonly path: string }
+	| { readonly kind: "tcp"; readonly hostname: string; readonly port: number };
+
 export interface ServeOptions {
-	/** Localhost TCP port. 0 = ephemeral (used by tests). */
-	port?: number;
-	/** Bind host. Defaults to 127.0.0.1 — loopback only until step 4 lands. */
-	hostname?: string;
+	/**
+	 * Bind target. Defaults to ephemeral TCP `127.0.0.1:0` (used by unit
+	 * tests). The CLI (`burrow serve`, step 5) defaults to a unix socket.
+	 */
+	transport?: Transport;
+	/**
+	 * Auth strategy. Defaults to `NO_AUTH` for tests; the CLI plugs in a
+	 * bearer-token provider via `resolveAuth({ token | noAuth })` so a real
+	 * `burrow serve` always either authenticates or explicitly opts out.
+	 */
+	auth?: AuthProvider;
 	/** Override the route table (tests); defaults to `buildRoutes(client)`. */
 	routes?: readonly Route[];
 	/** Pre-resolved logger; one is created if omitted. */
@@ -71,8 +89,15 @@ export interface ServeOptions {
 }
 
 export interface ServeHandle {
-	readonly hostname: string;
-	readonly port: number;
+	readonly transport: Transport;
+	/**
+	 * Best-effort URL string for logging.
+	 *  - tcp  → `http://127.0.0.1:1234`
+	 *  - unix → `unix:///tmp/burrow.sock`
+	 *
+	 * Not parseable by `fetch()` for unix sockets (Bun fetch takes the path
+	 * via the `unix` option instead) — purely a human-readable hint.
+	 */
 	readonly url: string;
 	stop(): Promise<void>;
 }

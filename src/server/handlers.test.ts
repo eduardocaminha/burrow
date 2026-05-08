@@ -75,7 +75,10 @@ describe("server handlers", () => {
 		for (const rt of client.agents.list()) client.agents.unregister(rt.id);
 		client.agents.register(makeMockAgent("mock-agent", { spawnPerTurn: true }));
 		client.agents.register(makeMockAgent("mock-oneshot"));
-		handle = startServer(client, { port: 0, logger: silentLogger });
+		handle = startServer(client, {
+			transport: { kind: "tcp", hostname: "127.0.0.1", port: 0 },
+			logger: silentLogger,
+		});
 	});
 
 	afterEach(async () => {
