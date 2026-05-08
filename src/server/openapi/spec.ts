@@ -546,8 +546,16 @@ const OPERATIONS: readonly PathOperation[] = [
 				{
 					name: "once",
 					in: "query",
-					description: "Emit a single snapshot then close.",
-					schema: { type: "string", enum: ["true", "false"] },
+					description:
+						"Emit a single snapshot then close. Accepts `true`/`false` or `1`/`0`. Mutually exclusive with `follow`.",
+					schema: { type: "string", enum: ["true", "false", "1", "0"] },
+				},
+				{
+					name: "follow",
+					in: "query",
+					description:
+						"Inverse alias of `once` — when false, emit one snapshot then close; when true (default), keep streaming. Accepts `true`/`false` or `1`/`0`. Mutually exclusive with `once`.",
+					schema: { type: "string", enum: ["true", "false", "1", "0"] },
 				},
 				{ name: "coalesceMs", in: "query", schema: { type: "integer", minimum: 0 } },
 				pollIntervalMsParam,

@@ -1817,10 +1817,26 @@
               "type": "string",
               "enum": [
                 "true",
-                "false"
+                "false",
+                "1",
+                "0"
               ]
             },
-            "description": "Emit a single snapshot then close."
+            "description": "Emit a single snapshot then close. Accepts `true`/`false` or `1`/`0`. Mutually exclusive with `follow`."
+          },
+          {
+            "name": "follow",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false",
+                "1",
+                "0"
+              ]
+            },
+            "description": "Inverse alias of `once` — when false, emit one snapshot then close; when true (default), keep streaming. Accepts `true`/`false` or `1`/`0`. Mutually exclusive with `once`."
           },
           {
             "name": "coalesceMs",

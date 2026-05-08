@@ -492,7 +492,7 @@ describe("server handlers", () => {
 	/* Streaming: watch snapshot (§26)                                     */
 	/* ------------------------------------------------------------------- */
 
-	test("GET /watch?once=1 emits one DashboardSnapshot and closes", async () => {
+	test("GET /watch?once=true emits one DashboardSnapshot and closes", async () => {
 		const burrow = seedBurrow(client);
 		const res = await fetch(`${handle.url}/watch?once=true&pollIntervalMs=0&coalesceMs=0`);
 		expect(res.status).toBe(200);
@@ -503,6 +503,37 @@ describe("server handlers", () => {
 		expect(snap?.type).toBe("snapshot");
 		expect(snap?.version).toBe(1);
 		expect(snap?.burrows.map((b) => b.id)).toEqual([burrow.id]);
+	});
+
+	test("GET /watch?once=1 (curl muscle memory) emits one snapshot and closes", async () => {
+		seedBurrow(client);
+		const res = await fetch(`${handle.url}/watch?once=1&pollIntervalMs=0&coalesceMs=0`);
+		expect(res.status).toBe(200);
+		const lines = parseNdjson(await res.text()) as DashboardSnapshot[];
+		expect(lines.length).toBe(1);
+	});
+
+	test("GET /watch?follow=0 (alias) emits one snapshot and closes", async () => {
+		seedBurrow(client);
+		const res = await fetch(`${handle.url}/watch?follow=0&pollIntervalMs=0&coalesceMs=0`);
+		expect(res.status).toBe(200);
+		const lines = parseNdjson(await res.text()) as DashboardSnapshot[];
+		expect(lines.length).toBe(1);
+	});
+
+	test("GET /watch?once and ?follow specified together → 400", async () => {
+		const res = await fetch(`${handle.url}/watch?once=1&follow=0`);
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: { code: string; message: string } };
+		expect(body.error.code).toBe("validation_error");
+		expect(body.error.message).toMatch(/either '\?once' or '\?follow'/);
+	});
+
+	test("GET /watch?once=bogus → 400 mentions accepted forms", async () => {
+		const res = await fetch(`${handle.url}/watch?once=bogus`);
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: { message: string } };
+		expect(body.error.message).toMatch(/once must be 'true'\/'1' or 'false'\/'0'/);
 	});
 
 	test("GET /watch?runsLimit=0 → 400", async () => {

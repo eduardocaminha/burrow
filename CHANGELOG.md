@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`/watch` query-param grammar uniform with other streaming routes
+  (`burrow-130a`).** `?once=` now accepts `1`/`0` in addition to
+  `true`/`false` (matching the SPEC §27 doc and `?follow=` on
+  `/burrows/:id/events`), and `/watch` accepts `?follow=` as the inverse
+  alias of `?once=` so curl muscle memory carries across endpoints.
+  Specifying both `?once` and `?follow` is now a 400. Previously
+  `/watch?once=1` returned a 400 and `/watch?follow=0` was silently
+  ignored — the stream ran forever.
+
 ### Added
 
 - **`burrow serve` — HTTP API (SPEC §27).** Bun.serve thin layer over the

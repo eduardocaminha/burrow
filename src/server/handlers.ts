@@ -137,14 +137,17 @@ function parseNonNegativeInt(raw: string | null, label: string): number | undefi
 }
 
 /**
- * Streaming routes accept follow as 'true'/'false' OR '1'/'0' so curl users
- * can write `?follow=1` (CLI muscle memory) without surprises.
+ * Streaming routes accept their boolean toggle as 'true'/'false' OR '1'/'0'
+ * so curl users can write `?follow=1` / `?once=1` (CLI muscle memory)
+ * without surprises. Used by `?follow=` on /events and /runs/:id/stream and
+ * by `?once=` / `?follow=` on /watch — every streaming endpoint takes the
+ * same input grammar.
  */
-function parseStreamFollow(raw: string | null): boolean | undefined {
+function parseStreamBool(raw: string | null, label: string): boolean | undefined {
 	if (raw === null) return undefined;
 	if (raw === "true" || raw === "1") return true;
 	if (raw === "false" || raw === "0") return false;
-	throw new ValidationError(`follow must be 'true'/'1' or 'false'/'0'; got '${raw}'`);
+	throw new ValidationError(`${label} must be 'true'/'1' or 'false'/'0'; got '${raw}'`);
 }
 
 function parseBoolean(raw: string | null, label: string): boolean | undefined {
@@ -449,7 +452,7 @@ function eventsTailHandler(client: Client): RouteHandler {
 	return (ctx) => {
 		const id = requireParam(ctx, "id");
 		client.burrows.get(id);
-		const follow = parseStreamFollow(ctx.url.searchParams.get("follow")) ?? true;
+		const follow = parseStreamBool(ctx.url.searchParams.get("follow"), "follow") ?? true;
 		const since = parseNonNegativeInt(ctx.url.searchParams.get("since"), "since");
 		const kinds = parseKindFilter([
 			...ctx.url.searchParams.getAll("kinds"),
@@ -507,12 +510,29 @@ function runStreamHandler(client: Client): RouteHandler {
  * --json` exactly (src/cli/commands/watch.ts runJsonMode), the wire shape
  * SPEC §26.5 pre-committed for `burrow serve`. Forwards
  * `coalesceMs`/`pollIntervalMs`/`runsLimit`/`eventTailCap` through to
- * `streamSnapshots`; `?once=1` collapses the stream to the first yielded
- * snapshot for one-shot consumers and CI scripts.
+ * `streamSnapshots`. `?once=1` collapses the stream to the first yielded
+ * snapshot for one-shot consumers and CI scripts; `?follow=0` is the
+ * inverse alias so the streaming-param grammar matches /events and
+ * /runs/:id/stream (mx-b3423b: same `'true'|'false'|'1'|'0'` shape across
+ * every streaming endpoint). Specifying both `?once` and `?follow` is a
+ * 400 — they are inverses, so accepting both is ambiguous.
  */
 function watchHandler(client: Client): RouteHandler {
 	return (ctx) => {
-		const once = parseBoolean(ctx.url.searchParams.get("once"), "once") ?? false;
+		const onceRaw = ctx.url.searchParams.get("once");
+		const followRaw = ctx.url.searchParams.get("follow");
+		if (onceRaw !== null && followRaw !== null) {
+			throw new ValidationError(
+				"specify either '?once' or '?follow' on /watch (they are inverses), not both",
+			);
+		}
+		let once = false;
+		if (onceRaw !== null) {
+			once = parseStreamBool(onceRaw, "once") ?? false;
+		} else if (followRaw !== null) {
+			const follow = parseStreamBool(followRaw, "follow");
+			if (follow !== undefined) once = !follow;
+		}
 		const coalesceMs = parseNonNegativeInt(ctx.url.searchParams.get("coalesceMs"), "coalesceMs");
 		const pollIntervalMs = parseNonNegativeInt(
 			ctx.url.searchParams.get("pollIntervalMs"),
