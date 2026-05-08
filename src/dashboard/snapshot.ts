@@ -138,8 +138,39 @@ function toEventTailEntry(row: EventRow): EventTailEntry {
 		kind: row.kind,
 		stream: row.stream,
 		ts: row.ts.toISOString(),
-		payload: row.payloadJson,
+		payload: summarizeEventPayload(row.kind, row.stream, row.payloadJson),
 	};
+}
+
+/**
+ * Trim payloads that are large but not informative at the dashboard level.
+ *
+ * Claude Code's first event per run is a `system/init` envelope carrying the
+ * full tool list, slash commands, skills list, MCP servers, and memory paths
+ * — typically a few KB. The SQLite event store keeps the full payload so
+ * `burrow events --follow` / `burrow logs --follow` and the archive replay
+ * stay lossless; the dashboard snapshot is best-effort live state (SPEC §26.4)
+ * and pays an O(N · payloadSize) floor per coalesce window per active burrow,
+ * so we drop the bulky lists here while keeping the small identifying fields a
+ * renderer might surface (model, session_id, cwd, permissionMode).
+ *
+ * Detection is by stable wire shape: `kind=state_change`, `stream=system`,
+ * payload `{ type: "system", subtype: "init" }` (the envelope produced by
+ * `parseJsonlClaude` for Claude Code's `type=system` lines).
+ */
+function summarizeEventPayload(kind: string, stream: string, payload: unknown): unknown {
+	if (kind !== "state_change" || stream !== "system") return payload;
+	if (payload === null || typeof payload !== "object") return payload;
+	const env = payload as Record<string, unknown>;
+	if (env.type !== "system" || env.subtype !== "init") return payload;
+
+	const slim: Record<string, unknown> = { type: "system", subtype: "init" };
+	for (const key of ["session_id", "model", "cwd", "permissionMode"] as const) {
+		const v = env[key];
+		if (typeof v === "string") slim[key] = v;
+	}
+	slim._truncated = true;
+	return slim;
 }
 
 /**

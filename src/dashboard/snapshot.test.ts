@@ -400,6 +400,107 @@ describe("buildSnapshot", () => {
 		expect(card.runs[0].completedAt).toBeNull();
 	});
 
+	test("claude-code system/init payload is summarized in eventTail (heavy fields dropped)", () => {
+		const burrow = seedBurrow(repos);
+		repos.events.append({
+			burrowId: burrow.id,
+			kind: "state_change",
+			stream: "system",
+			payload: {
+				type: "system",
+				subtype: "init",
+				session_id: "sess-abc",
+				model: "claude-sonnet-4-6",
+				cwd: "/work/proj",
+				permissionMode: "acceptEdits",
+				tools: ["Bash", "Read", "Edit", "Write", "Grep", "Glob", "Task"],
+				slash_commands: ["/help", "/clear", "/init", "/review"],
+				skills: ["release", "init", "claude-api"],
+				mcp_servers: [{ name: "ide", status: "connected" }],
+				memory: ["/Users/x/.claude/CLAUDE.md", "/work/proj/CLAUDE.md"],
+			},
+			ts: new Date(1000),
+		});
+		const snap = buildSnapshot(repos, { now: NOW });
+		const entry = snap.burrows[0]?.eventTail[0];
+		expect(entry?.payload).toEqual({
+			type: "system",
+			subtype: "init",
+			session_id: "sess-abc",
+			model: "claude-sonnet-4-6",
+			cwd: "/work/proj",
+			permissionMode: "acceptEdits",
+			_truncated: true,
+		});
+	});
+
+	test("system/init summary tolerates missing optional identifying fields", () => {
+		const burrow = seedBurrow(repos);
+		repos.events.append({
+			burrowId: burrow.id,
+			kind: "state_change",
+			stream: "system",
+			payload: { type: "system", subtype: "init", tools: ["Bash"] },
+			ts: new Date(1000),
+		});
+		const snap = buildSnapshot(repos, { now: NOW });
+		expect(snap.burrows[0]?.eventTail[0]?.payload).toEqual({
+			type: "system",
+			subtype: "init",
+			_truncated: true,
+		});
+	});
+
+	test("non-init system state_change events pass through untouched", () => {
+		const burrow = seedBurrow(repos);
+		// e.g. claude-code result envelope — small, no need to slim
+		repos.events.append({
+			burrowId: burrow.id,
+			kind: "state_change",
+			stream: "system",
+			payload: { type: "result", subtype: "success", is_error: false, result: "done" },
+			ts: new Date(1000),
+		});
+		// e.g. a system event that isn't the init envelope shape
+		repos.events.append({
+			burrowId: burrow.id,
+			kind: "state_change",
+			stream: "system",
+			payload: { type: "system", subtype: "compact_boundary", tools: ["Bash"] },
+			ts: new Date(2000),
+		});
+		const snap = buildSnapshot(repos, { now: NOW });
+		const tail = snap.burrows[0]?.eventTail ?? [];
+		expect(tail[0]?.payload).toEqual({
+			type: "result",
+			subtype: "success",
+			is_error: false,
+			result: "done",
+		});
+		expect(tail[1]?.payload).toEqual({
+			type: "system",
+			subtype: "compact_boundary",
+			tools: ["Bash"],
+		});
+	});
+
+	test("non-system streams pass through untouched even for state_change kind", () => {
+		const burrow = seedBurrow(repos);
+		repos.events.append({
+			burrowId: burrow.id,
+			kind: "state_change",
+			stream: "stdout",
+			payload: { type: "system", subtype: "init", tools: ["Bash"] },
+			ts: new Date(1000),
+		});
+		const snap = buildSnapshot(repos, { now: NOW });
+		expect(snap.burrows[0]?.eventTail[0]?.payload).toEqual({
+			type: "system",
+			subtype: "init",
+			tools: ["Bash"],
+		});
+	});
+
 	test("default eventTailCap is DEFAULT_EVENT_TAIL_CAP", () => {
 		const burrow = seedBurrow(repos);
 		const total = DEFAULT_EVENT_TAIL_CAP + 3;
