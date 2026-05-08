@@ -28,11 +28,13 @@ RUN apt-get update \
 	&& rm -rf /var/lib/apt/lists/*
 
 # Non-root dev user. UID/GID 1000 matches the default macOS/Linux host user
-# so bind-mounted /workspace files keep sane ownership.
+# so bind-mounted /workspace files keep sane ownership. Ubuntu 24.04 ships
+# a stock `ubuntu` user at 1000:1000, so drop it first before claiming the id.
 ARG USERNAME=dev
 ARG USER_UID=1000
 ARG USER_GID=1000
-RUN groupadd --gid ${USER_GID} ${USERNAME} \
+RUN if id -u ubuntu >/dev/null 2>&1; then userdel --remove ubuntu; fi \
+	&& groupadd --gid ${USER_GID} ${USERNAME} \
 	&& useradd --uid ${USER_UID} --gid ${USER_GID} --create-home --shell /bin/bash ${USERNAME}
 
 USER ${USERNAME}
@@ -43,6 +45,10 @@ ENV PATH=${BUN_INSTALL}/bin:${PATH}
 # Bun is the runtime + package manager (per CLAUDE.md). Pinned `latest` here;
 # version drift between contributors is fine because CI runs the same setup.
 RUN curl -fsSL https://bun.sh/install | bash
+
+# Claude Code CLI, baked into the image so `claude` is on PATH the moment the
+# container starts. Auth happens on first run (`claude` walks the user through).
+RUN bun install -g @anthropic-ai/claude-code
 
 WORKDIR /workspace
 
