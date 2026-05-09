@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-05-09
+
+### Added
+
+- **`burrow up --agents <id,…>` / `up({ agents })` (`burrow-55e3`).**
+  `HttpBurrowUpInput` / `BurrowUpInput` / `UpCommandOptions` gain an
+  optional `agents: readonly string[]` of runtime ids that
+  `resolveEffectiveAgents()` merges with `burrow.toml` `[[agents]]`
+  before the profile is built (existing config rows win on id overlap).
+  The merged list feeds both `collectToolchainPaths` and
+  `collectCredentialPaths`. Lets orchestrators (warren) enable a
+  built-in runtime at up-time when the project clone has no
+  `burrow.toml` — without it, `toolchainPaths` came back empty and
+  `bwrap` failed `execvp <bin>`.
+- **`DEPLOY.md` — authoritative deploy guide for `burrow serve`
+  (resolves ROADMAP R-01, `burrow-9986`).** On-host (systemd /
+  Fly Machine) is the production default; in-pod with the four-flag
+  bwrap recipe is acceptable for self-managed / single-tenant /
+  dev-CI postures, not for multi-tenant managed K8s/ECS/Cloud Run.
+  Includes reference systemd unit, Fly Machine config, Caddy
+  reverse-proxy snippet, and verification commands. README links it
+  from the `burrow serve` section. Unblocks R-02 substrate decision:
+  Fly Machines map to on-host posture, no admission-policy
+  negotiation.
+- **`ROADMAP.md` — forward-direction punch list (closes
+  `burrow-d103`).** SPEC.md is now the frozen V1 design record;
+  ROADMAP.md tracks `R-NN` items, seeded with R-01 (deploy posture,
+  shipped) and R-02..R-07 (FlyProvider + SshProvider, Drizzle
+  migrations, hooks, `burrow exec`, library-API consumers,
+  workspace-seed HTTP API). SPEC §25's open questions are resolved in
+  place. CLAUDE.md cross-references both files and routes future
+  deferred decisions into ROADMAP as `R-NN` entries instead of as
+  standalone informational seeds.
+- **npm provenance attestation on publish.** `id-token: write`
+  permission and `--provenance` on `npm publish` so the package page
+  on npmjs.com shows a verified link back to the GitHub commit /
+  workflow that built it. OIDC token is picked up from GHA
+  automatically — no other config needed.
+
+### Fixed
+
+- **`burrow serve` now drives HTTP-enqueued runs (`burrow-7b97`).**
+  `POST /burrows/:id/runs` previously called `repos.runs.enqueue()`
+  (DB insert with `state=queued`) but `startServer` never instantiated
+  a `RunLoop` or any executor, so HTTP-driven runs sat indefinitely.
+  Extracted the spawn-and-event-stream body into
+  `src/runner/dispatch.ts:dispatchRun` (always returns `RunOutcome`,
+  never throws on infra failures) and added
+  `src/runner/dispatcher.ts:startRunDispatcher` — owns a single
+  `RunLoop` and wires `RunsClient.setOnCreated` so HTTP-enqueued runs
+  flow into the loop the instant they're inserted. `runServeCommand`
+  starts the dispatcher *before* `startServer` (recovery + hook
+  installed before the first request) and stops in reverse on abort.
+  `burrow prompt` now delegates to `dispatchRun` via
+  `onEvent`/`onMessagesClaimed` callbacks; behavior change — spawn
+  failure no longer throws, the run finalizes as failed and the CLI
+  returns the result. Blocker for warren-8bc9 / -c09d / -9f65.
+- **Linux CI stability (`scripts/version-bump.ts` workflow runner).**
+  Four `runUpCommand` tests in `src/cli/commands/up.test.ts` were
+  missing `skipDoctor: true` and hit `runDoctor()`'s
+  sandbox-primitive check, which fails on Ubuntu CI because `bwrap`
+  isn't installed there. The `AbortSignal` test in
+  `src/ship/run.test.ts` wrapped `sleep` in `sh -c`; under dash
+  (Ubuntu's `/bin/sh`) `SIGTERM` killed `sh` but orphaned `sleep`,
+  keeping pipes open until it exited 5s later and blocking
+  stream-drain past the test timeout. Spawned `sleep` directly to
+  test the actual contract (abort kills the child) without the
+  shell-fork confound.
+
 ## [0.2.1] - 2026-05-08
 
 ### Fixed
@@ -207,7 +276,8 @@ coding agents on Linux (`bwrap`) and macOS (`sandbox-exec`).
   and agents (previously empty, breaking PATH inside the sandbox).
 - `burrow destroy` drops the per-burrow branch when tearing down a worktree.
 
-[Unreleased]: https://github.com/jayminwest/burrow/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/jayminwest/burrow/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/jayminwest/burrow/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/jayminwest/burrow/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jayminwest/burrow/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jayminwest/burrow/releases/tag/v0.1.0
