@@ -349,13 +349,12 @@ bwrap \
   --ro-bind /bin /bin \
   --ro-bind <toolchain-paths> ... \
   --ro-bind ${SSH_AUTH_SOCK} ${SSH_AUTH_SOCK} \   # SSH agent passthrough
-  --setenv HOME /workspace \
-  --setenv PATH ... \
-  --setenv ${user-allowed-env} ... \
   --chdir /workspace \
   --die-with-parent \
   -- <agent-argv>
 ```
+
+Env (HOME, PATH, declared passthrough, setEnv overrides) is delivered via the bwrap process's own environment — set by the Linux spawn wrapper as the `env` argument to its child-process call — and inherited across `execve` to the agent. It is **not** placed on the bwrap argv via `--setenv NAME VALUE`: that argv is world-readable through `/proc/<pid>/cmdline` and would leak secrets like `ANTHROPIC_API_KEY` (burrow-ab95). With this channel, secrets only ever live in `/proc/<pid>/environ` (mode 400, private to the running uid).
 
 When network policy is `restricted`, bwrap is invoked without `--share-net` and a per-burrow nftables/userspace proxy gates outbound DNS to the allowlisted domains. When `none`, full network namespace isolation. When `open`, full host network access (development override only).
 

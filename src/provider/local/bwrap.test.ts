@@ -27,7 +27,7 @@ const cmd = (over: Partial<SpawnCommand> = {}): SpawnCommand => ({
 
 describe("buildBwrapArgv", () => {
 	test("starts with `bwrap --unshare-all`, ends with `-- argv`", () => {
-		const argv = buildBwrapArgv(baseProfile(), cmd(), { hostEnv: {} });
+		const argv = buildBwrapArgv(baseProfile(), cmd());
 		expect(argv[0]).toBe("bwrap");
 		expect(argv).toContain("--unshare-all");
 		const dashDash = argv.indexOf("--");
@@ -36,16 +36,15 @@ describe("buildBwrapArgv", () => {
 	});
 
 	test("network=open shares the host net namespace", () => {
-		const argv = buildBwrapArgv(baseProfile({ network: "open" }), cmd(), { hostEnv: {} });
+		const argv = buildBwrapArgv(baseProfile({ network: "open" }), cmd());
 		expect(argv).toContain("--share-net");
 	});
 
 	test("network=none keeps net unshared; network=restricted needs proxyAddress to share-net", () => {
-		const none = buildBwrapArgv(baseProfile({ network: "none" }), cmd(), { hostEnv: {} });
+		const none = buildBwrapArgv(baseProfile({ network: "none" }), cmd());
 		const restrictedNoProxy = buildBwrapArgv(
 			baseProfile({ network: "restricted", allowedDomains: ["github.com"] }),
 			cmd(),
-			{ hostEnv: {} },
 		);
 		const restrictedWithProxy = buildBwrapArgv(
 			baseProfile({
@@ -54,7 +53,6 @@ describe("buildBwrapArgv", () => {
 				proxyAddress: { host: "127.0.0.1", port: 51234 },
 			}),
 			cmd(),
-			{ hostEnv: {} },
 		);
 		expect(none).not.toContain("--share-net");
 		// Restricted without a proxy stays deny-all (broken legacy behavior is
@@ -66,12 +64,12 @@ describe("buildBwrapArgv", () => {
 	});
 
 	test("workspace is bound read-write at /workspace", () => {
-		const argv = buildBwrapArgv(baseProfile({ workspace: "/host/ws" }), cmd(), { hostEnv: {} });
+		const argv = buildBwrapArgv(baseProfile({ workspace: "/host/ws" }), cmd());
 		expectAdjacent(argv, "--bind", "/host/ws", "/workspace");
 	});
 
 	test("system dirs are bound read-only via --ro-bind-try", () => {
-		const argv = buildBwrapArgv(baseProfile(), cmd(), { hostEnv: {} });
+		const argv = buildBwrapArgv(baseProfile(), cmd());
 		for (const path of SYSTEM_RO_MOUNTS) {
 			expectAdjacent(argv, "--ro-bind-try", path, path);
 		}
@@ -84,7 +82,6 @@ describe("buildBwrapArgv", () => {
 				sshAuthSock: "/run/user/1000/ssh-agent",
 			}),
 			cmd(),
-			{ hostEnv: {} },
 		);
 		expectAdjacent(argv, "--ro-bind", "/opt/homebrew/bin/bun", "/opt/homebrew/bin/bun");
 		expectAdjacent(argv, "--ro-bind", "/run/user/1000/ssh-agent", "/run/user/1000/ssh-agent");
@@ -99,7 +96,6 @@ describe("buildBwrapArgv", () => {
 				toolchainPaths: ["/home/u/.bun/bin", "/home/u/.bun/install/global/node_modules"],
 			}),
 			cmd(),
-			{ hostEnv: {} },
 		);
 		expectAdjacent(
 			argv,
@@ -109,48 +105,43 @@ describe("buildBwrapArgv", () => {
 		);
 	});
 
-	test("--clearenv wipes host env before --setenv lines", () => {
-		const argv = buildBwrapArgv(baseProfile(), cmd(), { hostEnv: { LEAKED: "yes" } });
-		const clearIdx = argv.indexOf("--clearenv");
-		expect(clearIdx).toBeGreaterThan(0);
-		expect(argv).not.toContain("LEAKED");
-		// HOME and PATH baseline are always set
-		expectAdjacent(argv, "--setenv", "HOME", "/workspace");
-		expectAdjacent(argv, "--setenv", "PATH", "/usr/bin:/bin");
-	});
-
-	test("envPassthrough forwards host values; setEnv overrides", () => {
+	test("env is NOT placed on argv: secrets stay out of /proc/<pid>/cmdline (burrow-ab95)", () => {
+		// Regression for burrow-ab95. Env values like ANTHROPIC_API_KEY used to land
+		// on argv via `--setenv NAME VALUE` and leak through /proc/<pid>/cmdline
+		// (world-readable). They now travel via the bwrap process env (set by
+		// spawnLinux's Bun.spawn), so neither the names of envPassthrough/setEnv
+		// keys nor their values appear in argv. Verified separately: the resolved
+		// env still reaches the child — see env.test.ts and the macOS integration
+		// tests in sandbox.test.ts.
 		const argv = buildBwrapArgv(
 			baseProfile({
-				envPassthrough: ["ANTHROPIC_API_KEY", "MISSING_VAR"],
-				setEnv: { LOG_LEVEL: "debug", PATH: "/custom/bin" },
+				envPassthrough: ["ANTHROPIC_API_KEY"],
+				setEnv: { OPENAI_API_KEY: "sk-secret-from-setenv", LOG_LEVEL: "debug" },
+				sshAuthSock: "/tmp/agent.sock",
 			}),
-			cmd({ env: { CMD_VAR: "x", LOG_LEVEL: "trace" } }),
-			{ hostEnv: { ANTHROPIC_API_KEY: "sk-test" } },
+			cmd({ env: { GITHUB_TOKEN: "ghp_secret-from-cmd" } }),
 		);
-		expectAdjacent(argv, "--setenv", "ANTHROPIC_API_KEY", "sk-test");
-		expect(argv).not.toContain("MISSING_VAR");
-		expectAdjacent(argv, "--setenv", "PATH", "/custom/bin");
-		// command-level env wins over profile setEnv
-		expectAdjacent(argv, "--setenv", "LOG_LEVEL", "trace");
-		expectAdjacent(argv, "--setenv", "CMD_VAR", "x");
-	});
-
-	test("sshAuthSock auto-exports SSH_AUTH_SOCK", () => {
-		const argv = buildBwrapArgv(baseProfile({ sshAuthSock: "/tmp/agent.sock" }), cmd(), {
-			hostEnv: {},
-		});
-		expectAdjacent(argv, "--setenv", "SSH_AUTH_SOCK", "/tmp/agent.sock");
+		expect(argv).not.toContain("--clearenv");
+		expect(argv).not.toContain("--setenv");
+		// Concrete secret values must not appear anywhere on the argv.
+		expect(argv).not.toContain("sk-secret-from-setenv");
+		expect(argv).not.toContain("ghp_secret-from-cmd");
+		// Sanity: the workspace bind, ssh-agent ro-bind, and child argv are all
+		// still emitted — env stripping didn't accidentally take them with it.
+		expectAdjacent(argv, "--bind", "/host/workspaces/bur_x", "/workspace");
+		expectAdjacent(argv, "--ro-bind", "/tmp/agent.sock", "/tmp/agent.sock");
+		const dashDash = argv.indexOf("--");
+		expect(argv.slice(dashDash + 1)).toEqual(["echo", "hi"]);
 	});
 
 	test("--die-with-parent and --chdir /workspace are present", () => {
-		const argv = buildBwrapArgv(baseProfile(), cmd(), { hostEnv: {} });
+		const argv = buildBwrapArgv(baseProfile(), cmd());
 		expect(argv).toContain("--die-with-parent");
 		expectAdjacent(argv, "--chdir", "/workspace");
 	});
 
 	test("defaults to non-root --uid/--gid so claude-code etc. don't refuse on root hosts (burrow-0329)", () => {
-		const argv = buildBwrapArgv(baseProfile(), cmd(), { hostEnv: {} });
+		const argv = buildBwrapArgv(baseProfile(), cmd());
 		expectAdjacent(argv, "--uid", String(DEFAULT_SANDBOX_UID));
 		expectAdjacent(argv, "--gid", String(DEFAULT_SANDBOX_GID));
 		expect(DEFAULT_SANDBOX_UID).not.toBe(0);
@@ -158,16 +149,14 @@ describe("buildBwrapArgv", () => {
 	});
 
 	test("profile.runAsUid/runAsGid override the defaults", () => {
-		const argv = buildBwrapArgv(baseProfile({ runAsUid: 1500, runAsGid: 1501 }), cmd(), {
-			hostEnv: {},
-		});
+		const argv = buildBwrapArgv(baseProfile({ runAsUid: 1500, runAsGid: 1501 }), cmd());
 		expectAdjacent(argv, "--uid", "1500");
 		expectAdjacent(argv, "--gid", "1501");
 		expect(argv).not.toContain(String(DEFAULT_SANDBOX_UID));
 	});
 
 	test("--uid/--gid emitted after --unshare-all (bwrap requires userns first)", () => {
-		const argv = buildBwrapArgv(baseProfile(), cmd(), { hostEnv: {} });
+		const argv = buildBwrapArgv(baseProfile(), cmd());
 		const unshareIdx = argv.indexOf("--unshare-all");
 		const uidIdx = argv.indexOf("--uid");
 		const gidIdx = argv.indexOf("--gid");
@@ -177,12 +166,12 @@ describe("buildBwrapArgv", () => {
 	});
 
 	test("relative cwd resolves under /workspace", () => {
-		const argv = buildBwrapArgv(baseProfile(), cmd({ cwd: "src" }), { hostEnv: {} });
+		const argv = buildBwrapArgv(baseProfile(), cmd({ cwd: "src" }));
 		expectAdjacent(argv, "--chdir", "/workspace/src");
 	});
 
 	test("absolute cwd is preserved", () => {
-		const argv = buildBwrapArgv(baseProfile(), cmd({ cwd: "/workspace/sub" }), { hostEnv: {} });
+		const argv = buildBwrapArgv(baseProfile(), cmd({ cwd: "/workspace/sub" }));
 		expectAdjacent(argv, "--chdir", "/workspace/sub");
 	});
 });

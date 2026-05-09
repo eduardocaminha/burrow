@@ -4,9 +4,15 @@
  * The host file system is invisible by default (`--unshare-all`, no mounts);
  * we then explicitly admit the system directories needed for typical
  * toolchains, the workspace (read-write at /workspace), declared toolchain
- * paths, and an optional SSH agent socket. Env is wiped before being rebuilt
- * from `envPassthrough` + `setEnv` + per-command overrides so host secrets
- * don't leak unless declared.
+ * paths, and an optional SSH agent socket.
+ *
+ * Env is *not* placed on the argv. `--setenv NAME VALUE` is world-readable via
+ * `/proc/<bwrap-pid>/cmdline`, so secrets like ANTHROPIC_API_KEY would leak to
+ * any process that can stat the bwrap pid (burrow-ab95). Instead the caller
+ * (spawnLinux in sandbox.ts) resolves env via `resolveSandboxEnv` and hands it
+ * to `Bun.spawn`'s `env` option — bwrap inherits that env and execve()s the
+ * child with it, so secrets only ever live in `/proc/<pid>/environ` (mode 400,
+ * private to the running uid).
  *
  * Network policy:
  *   - "open"       — share the host net namespace (`--share-net`).
@@ -21,7 +27,6 @@
  */
 
 import type { SandboxProfile, SpawnCommand } from "../types.ts";
-import { resolveSandboxEnv } from "./env.ts";
 
 export const SYSTEM_RO_MOUNTS: readonly string[] = [
 	"/usr",
@@ -43,8 +48,6 @@ export const DEFAULT_SANDBOX_UID = 1000;
 export const DEFAULT_SANDBOX_GID = 1000;
 
 export interface BuildBwrapOptions {
-	/** Used to resolve `envPassthrough` names. Defaults to `process.env`. */
-	hostEnv?: Record<string, string | undefined>;
 	/** Override the bwrap binary (testing or non-PATH installs). */
 	bwrapBin?: string;
 }
@@ -93,14 +96,9 @@ export function buildBwrapArgv(
 	const cwd = resolveCwd(command.cwd);
 	argv.push("--chdir", cwd);
 
-	argv.push("--clearenv");
-	const env = resolveSandboxEnv(profile, command, {
-		homePath: "/workspace",
-		hostEnv: options.hostEnv ?? process.env,
-	});
-	for (const [name, value] of Object.entries(env)) {
-		argv.push("--setenv", name, value);
-	}
+	// Env is delivered via the bwrap process's own environment (set by
+	// spawnLinux's Bun.spawn `env` option), not via `--setenv` argv. See the
+	// module-level docstring + burrow-ab95.
 
 	argv.push("--", ...command.argv);
 	return argv;

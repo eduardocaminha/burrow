@@ -4,8 +4,10 @@
  * macOS — write the rendered Seatbelt profile to a `0600` temp file under
  * the system tmp dir, invoke `sandbox-exec -f`, clean up the temp dir when
  * the child exits or is cancelled.
- * Linux — invoke `bwrap` directly; env is injected via `--clearenv` plus
- * `--setenv`, so we don't need a side-channel for it.
+ * Linux — invoke `bwrap` directly. Env is delivered via Bun.spawn's `env`
+ * option (which becomes bwrap's process env, then propagates to the child via
+ * execve). Putting env on the bwrap argv via `--setenv` would leak secrets
+ * through `/proc/<pid>/cmdline` (burrow-ab95).
  *
  * Returns once the child has been spawned, with live stdout/stderr streams
  * and `exited` for awaiting the exit code. The BurrowProvider work in a
@@ -100,8 +102,17 @@ async function spawnLinux(
 	options: RunSandboxedOptions,
 ): Promise<SpawnResult> {
 	const argv = buildBwrapArgv(profile, command, { bwrapBin: options.bwrapBin });
+	const env = resolveSandboxEnv(profile, command, {
+		homePath: "/workspace",
+		hostEnv: process.env,
+	});
 	const wantsStdin = command.stdin !== undefined;
+	// `env` here becomes bwrap's process env (replacing process.env entirely,
+	// not merging with it). bwrap then execve()s the child with that same env,
+	// so secrets reach the child via /proc/<pid>/environ (mode 400) instead of
+	// /proc/<pid>/cmdline (world-readable). See burrow-ab95.
 	const proc = Bun.spawn(argv, {
+		env,
 		stdin: wantsStdin ? "pipe" : "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
