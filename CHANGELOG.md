@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-05-09
+
+### Fixed
+
+- **Bind host gitdir into sandbox so worktree-backed workspaces can run
+  git (`burrow-7a80`).** `git worktree add` writes the worktree's `.git`
+  *file* with an absolute `gitdir:` pointer at
+  `<hostClone>/.git/worktrees/<id>`, which the `/workspace` bind didn't
+  cover. Inside the sandbox every git invocation failed with
+  `fatal: not a git repository` — the agent couldn't commit or push its
+  own work. New `SandboxProfile.workspaceGitdir` plumbs through from
+  `MaterializedWorkspace` `Source.gitCommonDir` (set for
+  `kind: 'worktree'` via `discoverHostClone` /
+  `discoverGitCommonDir`, canonicalized through `realpath`); bwrap
+  binds it read-write at the same host path and seatbelt allows
+  read+write subpath. Both `up` and `fork` lift the value onto the
+  profile; `fork` drops any inherited value when the new workspace is
+  clone-backed.
+
 ## [0.2.6] - 2026-05-09
 
 ### Fixed
@@ -400,7 +419,8 @@ coding agents on Linux (`bwrap`) and macOS (`sandbox-exec`).
   and agents (previously empty, breaking PATH inside the sandbox).
 - `burrow destroy` drops the per-burrow branch when tearing down a worktree.
 
-[Unreleased]: https://github.com/jayminwest/burrow/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/jayminwest/burrow/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/jayminwest/burrow/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/jayminwest/burrow/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/jayminwest/burrow/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/jayminwest/burrow/compare/v0.2.3...v0.2.4
