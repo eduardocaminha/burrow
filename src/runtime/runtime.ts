@@ -90,5 +90,19 @@ export interface AgentRuntime {
 	 */
 	credentialPaths?(): Promise<string[]>;
 
+	/**
+	 * Host env var names this runtime needs forwarded into the sandbox for its
+	 * CLI to authenticate or configure itself. `burrow up` unions every
+	 * effective agent's list with the project's `[env]`-derived passthrough
+	 * names onto `SandboxProfile.envPassthrough`. Names listed here only
+	 * forward when the host process actually sets them — same dropping
+	 * behavior as project-declared passthrough (`resolveSandboxEnv`).
+	 *
+	 * This is the runtime-level escape hatch for env names that are an
+	 * intrinsic part of the runtime's contract (e.g. `ANTHROPIC_API_KEY` for
+	 * `claude-code`); per-project keys still belong in `burrow.toml [env]`.
+	 */
+	envPassthrough?: readonly string[];
+
 	installCheck(): Promise<InstallCheckResult>;
 }

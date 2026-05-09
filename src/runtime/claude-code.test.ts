@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { BurrowRow, MessageRow, RunRow } from "../db/schema.ts";
 import {
 	CLAUDE_CODE_BURROW_TMPDIR,
+	CLAUDE_CODE_ENV_PASSTHROUGH,
 	CLAUDE_CODE_SETTINGS_PATH,
 	claudeCodeBurrowTmpdir,
 	claudeCodeHostCredentialPaths,
@@ -176,6 +177,21 @@ describe("claudeCodeRuntime.buildResumeCommand", () => {
 			workspacePath: "/host/ws",
 		});
 		expect(cmd?.env?.TMPDIR).toBe(claudeCodeBurrowTmpdir("/host/ws"));
+	});
+});
+
+describe("claudeCodeRuntime.envPassthrough", () => {
+	test("declares the host env names claude-code reads at startup (burrow-e9e7)", () => {
+		// Frozen list — the runtime contract for these names is encoded in the
+		// CLI itself, not the project. Bumping requires verifying the new name
+		// is actually consulted by `claude` and updating the seed.
+		expect(claudeCodeRuntime.envPassthrough).toBe(CLAUDE_CODE_ENV_PASSTHROUGH);
+		expect(CLAUDE_CODE_ENV_PASSTHROUGH).toEqual([
+			"ANTHROPIC_API_KEY",
+			"ANTHROPIC_AUTH_TOKEN",
+			"ANTHROPIC_BASE_URL",
+			"CLAUDE_CODE_OAUTH_TOKEN",
+		]);
 	});
 });
 

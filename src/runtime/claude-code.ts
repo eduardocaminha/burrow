@@ -44,6 +44,21 @@ const CLAUDE_BIN = "claude";
 export const CLAUDE_CODE_SETTINGS_PATH = ".claude/settings.local.json";
 
 /**
+ * Host env vars the `claude` CLI consults at startup. Forwarded into the
+ * sandbox via `SandboxProfile.envPassthrough` so a project with no
+ * `burrow.toml [env]` block still authenticates when `ANTHROPIC_API_KEY` (or
+ * the OAuth siblings) is set in the burrow process env. Per-project keys
+ * (DATABASE_URL etc.) still belong in `burrow.toml [env]`; these names
+ * encode the runtime's *own* contract (burrow-e9e7).
+ */
+export const CLAUDE_CODE_ENV_PASSTHROUGH: readonly string[] = [
+	"ANTHROPIC_API_KEY",
+	"ANTHROPIC_AUTH_TOKEN",
+	"ANTHROPIC_BASE_URL",
+	"CLAUDE_CODE_OAUTH_TOKEN",
+];
+
+/**
  * Per-burrow TMPDIR root. claude-code's Bash tool stores command output under
  * `${TMPDIR-/tmp}/claude-${uid}/...` and runs a startup cleanup sweep across
  * the entire UID-keyed root — that races every other claude-code on the host
@@ -151,6 +166,7 @@ export const claudeCodeRuntime: AgentRuntime = {
 	id: "claude-code",
 	displayName: "Claude Code",
 	supportsResume: true,
+	envPassthrough: CLAUDE_CODE_ENV_PASSTHROUGH,
 
 	buildSpawnCommand(ctx: SpawnContext): SpawnCommand {
 		return {

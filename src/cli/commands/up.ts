@@ -197,12 +197,17 @@ export async function runUpCommand(input: UpCommandInput): Promise<UpCommandResu
 		resolveSandboxReadOnlyPaths(burrowToml?.sandbox?.read_only_paths ?? [], home),
 	);
 
+	const envPassthrough = collectRuntimeEnvPassthrough({
+		agents: effectiveAgents,
+		registry: input.client.agents,
+	});
+
 	const profile: SandboxProfile = {
 		workspace: workspace.workspacePath,
 		readOnlyMounts,
 		network,
 		allowedDomains: burrowToml?.sandbox?.allowed_domains ?? [],
-		envPassthrough: [],
+		envPassthrough,
 		setEnv: envResult.values,
 		toolchainPaths,
 	};
@@ -352,6 +357,38 @@ function mergeReadOnlyMounts(...sources: readonly (readonly string[])[]): string
 			if (path.length === 0 || seen.has(path)) continue;
 			seen.add(path);
 			out.push(path);
+		}
+	}
+	return out;
+}
+
+interface CollectRuntimeEnvPassthroughInput {
+	agents: readonly BurrowTomlAgent[];
+	registry: AgentsClient;
+}
+
+/**
+ * Union the `envPassthrough` declared by each effective runtime into the
+ * SandboxProfile. A runtime declares the host env names its CLI consults
+ * (e.g. `claude-code` → `ANTHROPIC_API_KEY` + OAuth siblings); listing them
+ * here is what makes a built-in runtime work in a project that ships no
+ * `burrow.toml [env]` block (burrow-e9e7). Per-project keys still belong in
+ * `[env].required` / `[env].optional`. An agent that opts out of credential
+ * forwarding via `forwardCredentials = false` also opts out of env
+ * passthrough — the two channels carry the same secret.
+ */
+function collectRuntimeEnvPassthrough(input: CollectRuntimeEnvPassthroughInput): string[] {
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (const agent of input.agents) {
+		if (agent.forwardCredentials === false) continue;
+		const rt = input.registry.get(agent.id);
+		const names = rt?.envPassthrough;
+		if (!names) continue;
+		for (const name of names) {
+			if (name.length === 0 || seen.has(name)) continue;
+			seen.add(name);
+			out.push(name);
 		}
 	}
 	return out;

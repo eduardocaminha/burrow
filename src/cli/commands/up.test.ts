@@ -731,6 +731,114 @@ read_only_paths = ["/host/shared", "/host/extra"]
 		expect(profile.readOnlyMounts).toEqual([]);
 	});
 
+	test("runtime envPassthrough lands on profile.envPassthrough (burrow-e9e7)", async () => {
+		// Built-in runtimes own the env-var contract their CLI consults; a
+		// project with no burrow.toml [env] block must still get those names
+		// forwarded so the agent can authenticate.
+		writeFileSync(join(projectRoot, "burrow.toml"), `[[agents]]\nid = "envy-agent"\n`);
+		client.agents.register({
+			id: "envy-agent",
+			displayName: "Envy",
+			supportsResume: false,
+			buildSpawnCommand: () => ({ argv: ["envy"] }),
+			parseEvents: () => [],
+			installCheck: async () => ({ installed: true, version: "0", path: "/opt/envy/bin/envy" }),
+			envPassthrough: ["ENVY_TOKEN", "ENVY_BASE_URL"],
+		});
+		const result = await runUpCommand({
+			client,
+			projectRoot,
+			options: {},
+			materializer: fakeMaterializer,
+			skipDoctor: true,
+		});
+		const profile = result.burrow.profileJson as { envPassthrough: string[] };
+		expect(profile.envPassthrough).toEqual(["ENVY_TOKEN", "ENVY_BASE_URL"]);
+	});
+
+	test("envPassthrough dedupes across agents (declaration order wins)", async () => {
+		writeFileSync(
+			join(projectRoot, "burrow.toml"),
+			`[[agents]]\nid = "agent-a"\n[[agents]]\nid = "agent-b"\n`,
+		);
+		client.agents.register({
+			id: "agent-a",
+			displayName: "A",
+			supportsResume: false,
+			buildSpawnCommand: () => ({ argv: ["a"] }),
+			parseEvents: () => [],
+			installCheck: async () => ({ installed: true }),
+			envPassthrough: ["SHARED_TOKEN", "A_ONLY"],
+		});
+		client.agents.register({
+			id: "agent-b",
+			displayName: "B",
+			supportsResume: false,
+			buildSpawnCommand: () => ({ argv: ["b"] }),
+			parseEvents: () => [],
+			installCheck: async () => ({ installed: true }),
+			envPassthrough: ["SHARED_TOKEN", "B_ONLY"],
+		});
+		const result = await runUpCommand({
+			client,
+			projectRoot,
+			options: {},
+			materializer: fakeMaterializer,
+			skipDoctor: true,
+		});
+		const profile = result.burrow.profileJson as { envPassthrough: string[] };
+		expect(profile.envPassthrough).toEqual(["SHARED_TOKEN", "A_ONLY", "B_ONLY"]);
+	});
+
+	test("forwardCredentials = false also opts the agent out of envPassthrough", async () => {
+		// Both auth channels carry the same secret; if a project explicitly
+		// declines credential forwarding for an agent we must not smuggle the
+		// same values back in via envPassthrough.
+		writeFileSync(
+			join(projectRoot, "burrow.toml"),
+			`[[agents]]\nid = "envy-agent"\nforwardCredentials = false\n`,
+		);
+		client.agents.register({
+			id: "envy-agent",
+			displayName: "Envy",
+			supportsResume: false,
+			buildSpawnCommand: () => ({ argv: ["envy"] }),
+			parseEvents: () => [],
+			installCheck: async () => ({ installed: true }),
+			envPassthrough: ["ENVY_TOKEN"],
+		});
+		const result = await runUpCommand({
+			client,
+			projectRoot,
+			options: {},
+			materializer: fakeMaterializer,
+			skipDoctor: true,
+		});
+		const profile = result.burrow.profileJson as { envPassthrough: string[] };
+		expect(profile.envPassthrough).toEqual([]);
+	});
+
+	test("agents without envPassthrough contribute nothing (and don't fail up)", async () => {
+		writeFileSync(join(projectRoot, "burrow.toml"), `[[agents]]\nid = "quiet-agent"\n`);
+		client.agents.register({
+			id: "quiet-agent",
+			displayName: "Quiet",
+			supportsResume: false,
+			buildSpawnCommand: () => ({ argv: ["quiet"] }),
+			parseEvents: () => [],
+			installCheck: async () => ({ installed: true }),
+		});
+		const result = await runUpCommand({
+			client,
+			projectRoot,
+			options: {},
+			materializer: fakeMaterializer,
+			skipDoctor: true,
+		});
+		const profile = result.burrow.profileJson as { envPassthrough: string[] };
+		expect(profile.envPassthrough).toEqual([]);
+	});
+
 	test("default_branch from burrow.toml is used when --base-branch is omitted", async () => {
 		writeFileSync(join(projectRoot, "burrow.toml"), `[project]\ndefault_branch = "trunk"\n`);
 		let captured: MaterializeProjectOptions | undefined;
