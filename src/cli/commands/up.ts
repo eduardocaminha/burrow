@@ -211,6 +211,9 @@ export async function runUpCommand(input: UpCommandInput): Promise<UpCommandResu
 		setEnv: envResult.values,
 		toolchainPaths,
 	};
+	if (workspace.source.gitCommonDir) {
+		profile.workspaceGitdir = workspace.source.gitCommonDir;
+	}
 	const timeoutMinutes = burrowToml?.sandbox?.timeout_minutes;
 	if (timeoutMinutes !== undefined) profile.timeoutMs = timeoutMinutes * 60_000;
 	const memMb = burrowToml?.sandbox?.memory_limit_mb;

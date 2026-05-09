@@ -63,6 +63,10 @@ describe("materializeProjectWorkspace", () => {
 		expect(result.source.kind).toBe("worktree");
 		expect(result.source.branch).toBe("burrow/bur_test");
 		expect(result.source.hostClonePath?.endsWith("/repo")).toBe(true);
+		// gitCommonDir is the parent clone's `.git` — the host path the sandbox
+		// must bind so the worktree's `.git` file pointer dereferences inside
+		// the sandbox (burrow-7a80).
+		expect(result.source.gitCommonDir?.endsWith("/repo/.git")).toBe(true);
 		expect(await Bun.file(join(ws, "README.md")).exists()).toBe(true);
 		expect(result.identity).toEqual({
 			name: "Burrow Tester",
@@ -90,6 +94,27 @@ describe("materializeProjectWorkspace", () => {
 		const list = await listWorktrees(repo);
 		const entry = list.find((e) => e.worktree.endsWith("/ws-existing"));
 		expect(entry?.branch).toBe("refs/heads/feature/x");
+	});
+
+	test("worktree's .git file pointer resolves to the host gitCommonDir (burrow-7a80)", async () => {
+		// This is the actual repro for burrow-7a80: the worktree's `.git` *file*
+		// has a `gitdir:` line whose absolute path must exist on the host (and,
+		// downstream, inside the sandbox via a bind to source.gitCommonDir).
+		const ws = join(root, "ws-pointer");
+		const result = await materializeProjectWorkspace({
+			workspacePath: ws,
+			branch: "burrow/bur_pointer",
+			baseBranch: "main",
+			projectRoot: repo,
+			hostEnv: isolatedEnv(home),
+		});
+		const dotGit = await Bun.file(join(ws, ".git")).text();
+		const match = dotGit.match(/^gitdir:\s*(\S+)/m);
+		expect(match).not.toBeNull();
+		const gitdir = match?.[1] ?? "";
+		const commonDir = result.source.gitCommonDir ?? "";
+		expect(commonDir.length).toBeGreaterThan(0);
+		expect(gitdir.startsWith(commonDir)).toBe(true);
 	});
 
 	test("falls back to git clone when no host clone is detected", async () => {
@@ -179,6 +204,7 @@ describe("materializeTaskWorkspace", () => {
 		});
 		expect(result.source.kind).toBe("worktree");
 		expect(result.source.branch).toBe("task/bur_abc");
+		expect(result.source.gitCommonDir?.endsWith("/repo/.git")).toBe(true);
 		expect(result.identity).toEqual({ name: "Task Tester", email: "task@example.com" });
 
 		const list = await listWorktrees(repo);

@@ -144,13 +144,15 @@ function resolveCwd(workspace: string, cwd: string | undefined): string {
 }
 
 function canonicalizeProfilePaths(profile: SandboxProfile): SandboxProfile {
-	return {
+	const out: SandboxProfile = {
 		...profile,
 		workspace: realpathOrSelf(profile.workspace),
 		readOnlyMounts: profile.readOnlyMounts.map(realpathOrSelf),
 		toolchainPaths: profile.toolchainPaths.map(realpathOrSelf),
 		sshAuthSock: profile.sshAuthSock ? realpathOrSelf(profile.sshAuthSock) : profile.sshAuthSock,
 	};
+	if (profile.workspaceGitdir) out.workspaceGitdir = realpathOrSelf(profile.workspaceGitdir);
+	return out;
 }
 
 function realpathOrSelf(path: string): string {

@@ -83,6 +83,13 @@ export async function runForkCommand(input: ForkCommandInput): Promise<ForkComma
 		...(parent.profileJson as SandboxProfile),
 		workspace: workspace.workspacePath,
 	};
+	if (workspace.source.gitCommonDir) {
+		profile.workspaceGitdir = workspace.source.gitCommonDir;
+	} else {
+		// A clone-backed parent has no per-worktree gitdir to mount; drop the
+		// inherited value so the child sandbox doesn't reach a stale host path.
+		delete profile.workspaceGitdir;
+	}
 
 	const providerState = {
 		workspaceSource: workspace.source,

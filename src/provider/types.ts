@@ -49,6 +49,21 @@ export interface SandboxProfile {
 	runAsUid?: number;
 	/** Linux only: gid the sandboxed process runs as. Defaults to 1000. */
 	runAsGid?: number;
+	/**
+	 * Host path of the parent clone's `.git` common dir, bound read-write at
+	 * the same path inside the sandbox. Set when `MaterializedWorkspaceSource`
+	 * is `kind: "worktree"` (`up` / `fork` derive it from
+	 * `MaterializedWorkspaceSource.gitCommonDir`).
+	 *
+	 * `git worktree add` writes the worktree's `.git` *file* with an absolute
+	 * `gitdir:` pointer at `<gitCommonDir>/worktrees/<id>`; that path lives
+	 * outside the workspace bind, so without this mount every git invocation
+	 * inside the sandbox fails with `fatal: not a git repository` and the
+	 * agent can't commit or push its own work (burrow-7a80). It's read-write
+	 * because git needs to update per-worktree HEAD/index plus write new
+	 * objects into the shared object database when committing.
+	 */
+	workspaceGitdir?: string;
 }
 
 export interface SpawnCommand {

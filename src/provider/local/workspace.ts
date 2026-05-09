@@ -15,9 +15,11 @@
  * caller doesn't have to re-derive it.
  */
 
+import { realpathSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { WorkspaceMaterializationError } from "../../core/errors.ts";
+import { runGit } from "../../git/exec.ts";
 import {
 	type GitIdentity,
 	type IdentitySpec,
@@ -42,6 +44,20 @@ export interface MaterializedWorkspaceSource {
 	branch: string;
 	/** Host clone the worktree was added against. Absent when `kind === 'clone'`. */
 	hostClonePath?: string;
+	/**
+	 * Absolute host path of the parent clone's `.git` common dir (the directory
+	 * shared by every worktree of the same clone). Set when `kind === 'worktree'`.
+	 *
+	 * `git worktree add` writes the worktree's `.git` *file* with an absolute
+	 * `gitdir:` pointer at `<gitCommonDir>/worktrees/<id>`; the sandbox bind
+	 * for `/workspace` does not cover that path, so without an explicit
+	 * mount of `gitCommonDir` every git invocation inside the sandbox fails
+	 * with `fatal: not a git repository` (burrow-7a80). The sandbox profile
+	 * builders mount this read-write at the same host path so the pointer
+	 * dereferences and `git commit`/`git push` can write per-worktree HEAD,
+	 * index, and shared objects.
+	 */
+	gitCommonDir?: string;
 	/** Origin URL used for fresh clones. Absent for worktrees. */
 	originUrl?: string;
 }
@@ -126,14 +142,17 @@ export async function materializeTaskWorkspace(
 	}
 
 	const identity = await applyIdentity(options.workspacePath, options.identity, options.hostEnv);
+	const gitCommonDir = await discoverGitCommonDir(options.parentClonePath);
 
+	const source: MaterializedWorkspaceSource = {
+		kind: "worktree",
+		branch: options.taskBranch,
+		hostClonePath: options.parentClonePath,
+	};
+	if (gitCommonDir) source.gitCommonDir = gitCommonDir;
 	return {
 		workspacePath: options.workspacePath,
-		source: {
-			kind: "worktree",
-			branch: options.taskBranch,
-			hostClonePath: options.parentClonePath,
-		},
+		source,
 		identity,
 	};
 }
@@ -204,6 +223,7 @@ async function materializeViaWorktree(
 		kind: "worktree",
 		branch: options.branch,
 		hostClonePath: hostClone.topLevel,
+		gitCommonDir: canonicalize(hostClone.gitCommonDir),
 	};
 }
 
@@ -265,4 +285,46 @@ function wrapMaterializationError(prefix: string, err: unknown): WorkspaceMateri
 function isStaleWorktreeError(err: unknown): boolean {
 	if (err instanceof Error) return /not a working tree|does not exist/i.test(err.message);
 	return false;
+}
+
+/**
+ * Resolve `<clone>/.git` for a host clone, following the same rules as
+ * `discoverHostClone`: `git rev-parse --git-common-dir` returns an absolute
+ * path most of the time, "." when the clone is at its top-level, and
+ * occasionally a path relative to `cwd`.
+ *
+ * Falls back to `null` on any git failure — callers (currently only
+ * `materializeTaskWorkspace`) treat the absence as "no gitdir mount needed",
+ * which is the right thing for clone-backed parents that don't have a
+ * worktree pointer to dereference inside the sandbox.
+ */
+async function discoverGitCommonDir(clonePath: string): Promise<string | null> {
+	const res = await runGit(["rev-parse", "--git-common-dir"], { cwd: clonePath });
+	if (res.exitCode !== 0) return null;
+	const raw = res.stdout.trim();
+	if (raw.length === 0) return null;
+	const joined = raw.startsWith("/")
+		? raw
+		: raw === "." || raw === "./"
+			? `${clonePath.replace(/\/$/, "")}/.git`
+			: `${clonePath.replace(/\/$/, "")}/${raw}`;
+	return canonicalize(joined);
+}
+
+/**
+ * Resolve symlinks in `path`, falling back to the input when the path doesn't
+ * exist on disk. We canonicalize gitCommonDir specifically because:
+ *   1. `git worktree add` writes the worktree's `.git` file with a `gitdir:`
+ *      pointer that git itself resolved through any symlinks on the way in.
+ *      The bind mount has to use that same resolved path or the pointer
+ *      dangles inside the sandbox.
+ *   2. macOS Seatbelt (sandbox-exec) matches against canonical paths only —
+ *      `/var/folders/...` vs `/private/var/folders/...` etc.
+ */
+function canonicalize(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		return path;
+	}
 }

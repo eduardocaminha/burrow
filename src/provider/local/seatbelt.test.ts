@@ -118,6 +118,23 @@ describe("buildSeatbeltProfile", () => {
 		expect(out).toContain('(allow file-write* (literal "/dev/null"))');
 	});
 
+	test("workspaceGitdir gets read+write subpath rule (burrow-7a80)", () => {
+		// Worktree-backed workspaces carry a `.git` *file* whose `gitdir:` points
+		// at `<hostClonePath>/.git/worktrees/<id>`, outside the workspace subpath.
+		// The agent needs read+write on the host's git common dir at the same
+		// path so `git commit`/`git push` can update per-worktree HEAD/index and
+		// write new objects to the shared object database.
+		const out = buildSeatbeltProfile(baseProfile({ workspaceGitdir: "/Users/u/clone/.git" }));
+		expect(out).toContain(
+			'(allow file-read-data file-read-metadata file-write* (subpath "/Users/u/clone/.git"))',
+		);
+	});
+
+	test("workspaceGitdir rule is omitted when unset (clone-backed workspaces)", () => {
+		const out = buildSeatbeltProfile(baseProfile());
+		expect(out).not.toMatch(/\.git/);
+	});
+
 	test("paths with double-quotes are escaped", () => {
 		const out = buildSeatbeltProfile(baseProfile({ workspace: '/tmp/ws"weird' }));
 		expect(out).toContain('"/tmp/ws\\"weird"');

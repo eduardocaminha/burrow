@@ -91,6 +91,16 @@ export function buildBwrapArgv(
 		argv.push("--ro-bind", path, path);
 	}
 
+	// Worktree-backed workspaces carry a `.git` *file* whose `gitdir:` points at
+	// `<gitCommonDir>/worktrees/<id>` — outside the /workspace bind. Mount the
+	// host's git common dir at the same path inside the sandbox so the pointer
+	// dereferences and the agent can run `git status`/`commit`/`push` from
+	// inside its own workspace (burrow-7a80). Read-write because git writes
+	// per-worktree HEAD/index plus new objects to the shared object database.
+	if (profile.workspaceGitdir) {
+		argv.push("--bind", profile.workspaceGitdir, profile.workspaceGitdir);
+	}
+
 	argv.push("--bind", profile.workspace, "/workspace");
 
 	const cwd = resolveCwd(command.cwd);

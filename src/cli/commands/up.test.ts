@@ -93,6 +93,45 @@ describe("runUpCommand", () => {
 		expect(profile.toolchainPaths).toEqual([]);
 	});
 
+	test("worktree-backed materializer's gitCommonDir lifts onto profile.workspaceGitdir (burrow-7a80)", async () => {
+		const withGitdir = async (opts: MaterializeProjectOptions): Promise<MaterializedWorkspace> => ({
+			workspacePath: opts.workspacePath,
+			source: {
+				kind: "worktree",
+				branch: opts.branch,
+				hostClonePath: "/host/clone",
+				gitCommonDir: "/host/clone/.git",
+			},
+			identity: null,
+		});
+		const result = await runUpCommand({
+			client,
+			projectRoot: "/repos/web-app",
+			options: {},
+			materializer: withGitdir,
+			skipDoctor: true,
+		});
+		const profile = result.burrow.profileJson as { workspaceGitdir?: string };
+		expect(profile.workspaceGitdir).toBe("/host/clone/.git");
+	});
+
+	test("clone-backed materializer leaves profile.workspaceGitdir unset", async () => {
+		const cloneMat = async (opts: MaterializeProjectOptions): Promise<MaterializedWorkspace> => ({
+			workspacePath: opts.workspacePath,
+			source: { kind: "clone", branch: opts.branch, originUrl: "https://example/repo.git" },
+			identity: null,
+		});
+		const result = await runUpCommand({
+			client,
+			projectRoot: "/repos/web-app",
+			options: {},
+			materializer: cloneMat,
+			skipDoctor: true,
+		});
+		const profile = result.burrow.profileJson as { workspaceGitdir?: string };
+		expect(profile.workspaceGitdir).toBeUndefined();
+	});
+
 	test("renderUpResult prints the human summary", async () => {
 		const result = await runUpCommand({
 			client,

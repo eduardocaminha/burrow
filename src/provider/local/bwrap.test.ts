@@ -134,6 +134,34 @@ describe("buildBwrapArgv", () => {
 		expect(argv.slice(dashDash + 1)).toEqual(["echo", "hi"]);
 	});
 
+	test("workspaceGitdir is bound read-write at the same host path (burrow-7a80)", () => {
+		// Worktree-backed workspaces carry a `.git` *file* whose `gitdir:` points
+		// at `<hostClonePath>/.git/worktrees/<id>`. The /workspace bind doesn't
+		// reach that path, so without this mount every git invocation inside the
+		// sandbox fails with `fatal: not a git repository`.
+		const argv = buildBwrapArgv(
+			baseProfile({
+				workspace: "/host/ws",
+				workspaceGitdir: "/host/clone/.git",
+			}),
+			cmd(),
+		);
+		expectAdjacent(argv, "--bind", "/host/clone/.git", "/host/clone/.git");
+		// The workspace bind must still be present (and downstream of the gitdir
+		// bind so `/workspace` doesn't shadow anything).
+		expectAdjacent(argv, "--bind", "/host/ws", "/workspace");
+	});
+
+	test("workspaceGitdir is omitted entirely when not set (clone-backed workspaces)", () => {
+		const argv = buildBwrapArgv(baseProfile(), cmd());
+		// Only the workspace bind should be present — no extra --bind pairs.
+		const bindIndices = argv.reduce<number[]>(
+			(acc, tok, i) => (tok === "--bind" ? acc.concat(i) : acc),
+			[],
+		);
+		expect(bindIndices.length).toBe(1);
+	});
+
 	test("--die-with-parent and --chdir /workspace are present", () => {
 		const argv = buildBwrapArgv(baseProfile(), cmd());
 		expect(argv).toContain("--die-with-parent");

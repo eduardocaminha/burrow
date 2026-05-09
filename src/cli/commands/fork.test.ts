@@ -69,6 +69,28 @@ describe("runForkCommand", () => {
 		expect(calls[0]?.parentClonePath).toBe("/host");
 	});
 
+	test("worktree-backed materializer's gitCommonDir lifts onto child profile.workspaceGitdir (burrow-7a80)", async () => {
+		const parent = seedParent(client);
+		const withGitdir = async (opts: MaterializeTaskOptions): Promise<MaterializedWorkspace> => ({
+			workspacePath: opts.workspacePath,
+			source: {
+				kind: "worktree",
+				branch: opts.taskBranch,
+				hostClonePath: opts.parentClonePath,
+				gitCommonDir: `${opts.parentClonePath}/.git`,
+			},
+			identity: null,
+		});
+		const result = await runForkCommand({
+			client,
+			parentId: parent.id,
+			options: {},
+			materializer: withGitdir,
+		});
+		const profile = result.burrow.profileJson as { workspaceGitdir?: string };
+		expect(profile.workspaceGitdir).toBe("/host/.git");
+	});
+
 	test("rejects forking a destroyed parent", async () => {
 		const parent = seedParent(client);
 		client.repos.burrows.markDestroyed(parent.id);

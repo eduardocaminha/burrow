@@ -73,6 +73,19 @@ export function buildSeatbeltProfile(profile: SandboxProfile): string {
 		`(allow file-read-data file-read-metadata file-write* (subpath ${sbString(profile.workspace)}))`,
 	);
 
+	// Worktree-backed workspaces carry a `.git` *file* whose `gitdir:` points
+	// at `<gitCommonDir>/worktrees/<id>`, outside the workspace subpath above.
+	// Allow read+write on the host's git common dir at the same path so the
+	// pointer dereferences and the agent can run `git commit`/`push` from
+	// inside its workspace (burrow-7a80). Write is required: git updates
+	// per-worktree HEAD/index and appends new objects to the shared object
+	// database during commits.
+	if (profile.workspaceGitdir) {
+		lines.push(
+			`(allow file-read-data file-read-metadata file-write* (subpath ${sbString(profile.workspaceGitdir)}))`,
+		);
+	}
+
 	// /private/tmp and /private/var/folders need read+write, not write-only.
 	// claude-code's Bash tool writes command output under /tmp/claude-${uid}/...
 	// (which resolves to /private/tmp via the /tmp symlink) and reads it back;
