@@ -250,6 +250,59 @@ export const HealthResponseSchema = component("HealthResponse", z.object({ ok: z
 /* Request bodies                                                           */
 /* ----------------------------------------------------------------------- */
 
+export const WorkspaceFileSchema = component(
+	"WorkspaceFile",
+	z.object({
+		path: z
+			.string()
+			.min(1)
+			.describe(
+				"Workspace-relative path. Must stay inside `burrow.workspacePath`; absolute paths, `..` traversal, symlink escapes, and overwrites of `.git/` or sandbox-owned paths are rejected (400 validation_error).",
+			),
+		contents: z
+			.string()
+			.describe(
+				"File contents. UTF-8 text by default; if `encoding` is `base64`, the decoded bytes are written.",
+			),
+		encoding: z
+			.enum(["utf-8", "base64"])
+			.optional()
+			.describe(
+				"Encoding of `contents`. Defaults to `utf-8`. Use `base64` for binary payloads — multipart upload is a future, additive extension (R-07 V1 ships JSON only).",
+			),
+		mode: z
+			.number()
+			.int()
+			.min(0)
+			.max(0o777)
+			.optional()
+			.describe("POSIX mode bits applied with chmod after write (0–0o777). Defaults to 0o644."),
+	}),
+);
+
+export const WriteFilesBodySchema = component(
+	"WriteFilesBody",
+	z.object({
+		files: z
+			.array(WorkspaceFileSchema)
+			.min(1)
+			.describe(
+				"One or more files to write into the burrow workspace. Writes are all-or-nothing: a single rejected entry aborts the batch with no partial-state side effects.",
+			),
+	}),
+);
+
+export const WriteFilesResponseSchema = component(
+	"WriteFilesResponse",
+	z.object({
+		written: z
+			.number()
+			.int()
+			.nonnegative()
+			.describe("Number of files written (matches `body.files.length` on success)."),
+	}),
+);
+
 export const CreateBurrowBodySchema = component(
 	"CreateBurrowBody",
 	z.object({
@@ -266,6 +319,9 @@ export const CreateBurrowBodySchema = component(
 			.describe(
 				"Built-in runtime ids to enable as `[[agents]]` patch rows. Forwarded by orchestrators (e.g. warren) so the sandbox profile mounts the runtime's binary even when the project clone has no `burrow.toml`.",
 			),
+		seed: WriteFilesBodySchema.optional().describe(
+			"Optional workspace seed payload. Files are written into the new workspace before the burrow is returned, atomic with provisioning — single round-trip for orchestrators (e.g. warren) that need to drop `.canopy/`, `.mulch/`, `.seeds/` inputs before the agent starts. Same path-validation rules as `POST /burrows/{id}/files`.",
+		),
 	}),
 );
 

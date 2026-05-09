@@ -31,6 +31,9 @@ import {
 	QueryEnums,
 	RunSchema,
 	SendInboxBodySchema,
+	WorkspaceFileSchema,
+	WriteFilesBodySchema,
+	WriteFilesResponseSchema,
 } from "./schemas.ts";
 
 export type OpenApiDocument = Record<string, unknown>;
@@ -234,7 +237,7 @@ const OPERATIONS: readonly PathOperation[] = [
 		op: {
 			operationId: "createBurrow",
 			summary:
-				"Provision a project burrow (SPEC §15.1, §16). Loads `burrow.toml` from `projectRoot`, runs doctor, materializes the workspace worktree, and inserts the burrow row with its resolved sandbox profile. Returns 201 with the new `Burrow`.",
+				"Provision a project burrow (SPEC §15.1, §16). Loads `burrow.toml` from `projectRoot`, runs doctor, materializes the workspace worktree, and inserts the burrow row with its resolved sandbox profile. When a `seed` payload is included, its files are written into the workspace before the burrow is returned (atomic with provisioning, single round-trip). Returns 201 with the new `Burrow`.",
 			tags: ["burrows"],
 			requestBody: { schemaName: "CreateBurrowBody" },
 			responses: {
@@ -325,6 +328,57 @@ const OPERATIONS: readonly PathOperation[] = [
 					schemaName: "Burrow",
 				},
 				"404": errorResponse("not_found"),
+			},
+		},
+	},
+	{
+		method: "post",
+		pattern: "/burrows/{id}/files",
+		op: {
+			operationId: "writeFiles",
+			summary:
+				"Write files into a burrow's workspace (R-07). Same path-validation contract as `POST /burrows` with `seed`: workspace-relative paths only, no `..` traversal, no symlink escapes, no overwrites of `.git/` or sandbox-owned paths. The batch is all-or-nothing — a single rejected entry returns 400 with no partial writes.",
+			tags: ["burrows"],
+			parameters: [burrowIdParam],
+			requestBody: { schemaName: "WriteFilesBody" },
+			responses: {
+				"200": {
+					description: "Write succeeded. Body reports the count for caller-side sanity checks.",
+					contentType: "application/json",
+					schemaName: "WriteFilesResponse",
+				},
+				"400": errorResponse("validation_error on bad path or rejected file"),
+				"404": errorResponse("not_found"),
+			},
+		},
+	},
+	{
+		method: "get",
+		pattern: "/burrows/{id}/files",
+		op: {
+			operationId: "readFile",
+			summary:
+				"Read a single file from a burrow's workspace (R-07). Same path-validation contract as `POST /burrows/{id}/files` — workspace-relative only, no traversal or symlink escapes. Used by orchestrators (e.g. warren) to reap mulch records and other run outputs back over the wire.",
+			tags: ["burrows"],
+			parameters: [
+				burrowIdParam,
+				{
+					name: "path",
+					in: "query",
+					required: true,
+					description: "Workspace-relative path of the file to read.",
+					schema: { type: "string", minLength: 1 },
+				},
+			],
+			responses: {
+				"200": {
+					description:
+						"The file. `contents` is decoded per `encoding` (UTF-8 by default; `base64` for binary).",
+					contentType: "application/json",
+					schemaName: "WorkspaceFile",
+				},
+				"400": errorResponse("validation_error on bad path"),
+				"404": errorResponse("not_found (burrow or file)"),
 			},
 		},
 	},
@@ -705,6 +759,9 @@ function registrySources(): readonly z.ZodType[] {
 		CreateRunBodySchema,
 		CancelRunBodySchema,
 		SendInboxBodySchema,
+		WorkspaceFileSchema,
+		WriteFilesBodySchema,
+		WriteFilesResponseSchema,
 	];
 }
 

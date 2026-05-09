@@ -365,6 +365,10 @@
               "type": "string",
               "minLength": 1
             }
+          },
+          "seed": {
+            "description": "Optional workspace seed payload. Files are written into the new workspace before the burrow is returned, atomic with provisioning — single round-trip for orchestrators (e.g. warren) that need to drop `.canopy/`, `.mulch/`, `.seeds/` inputs before the agent starts. Same path-validation rules as `POST /burrows/{id}/files`.",
+            "$ref": "#/components/schemas/WriteFilesBody"
           }
         },
         "required": [
@@ -914,6 +918,71 @@
           "body"
         ],
         "additionalProperties": false
+      },
+      "WorkspaceFile": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Workspace-relative path. Must stay inside `burrow.workspacePath`; absolute paths, `..` traversal, symlink escapes, and overwrites of `.git/` or sandbox-owned paths are rejected (400 validation_error)."
+          },
+          "contents": {
+            "type": "string",
+            "description": "File contents. UTF-8 text by default; if `encoding` is `base64`, the decoded bytes are written."
+          },
+          "encoding": {
+            "description": "Encoding of `contents`. Defaults to `utf-8`. Use `base64` for binary payloads — multipart upload is a future, additive extension (R-07 V1 ships JSON only).",
+            "type": "string",
+            "enum": [
+              "utf-8",
+              "base64"
+            ]
+          },
+          "mode": {
+            "description": "POSIX mode bits applied with chmod after write (0–0o777). Defaults to 0o644.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 511
+          }
+        },
+        "required": [
+          "path",
+          "contents"
+        ],
+        "additionalProperties": false
+      },
+      "WriteFilesBody": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceFile"
+            },
+            "description": "One or more files to write into the burrow workspace. Writes are all-or-nothing: a single rejected entry aborts the batch with no partial-state side effects."
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "additionalProperties": false
+      },
+      "WriteFilesResponse": {
+        "type": "object",
+        "properties": {
+          "written": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Number of files written (matches `body.files.length` on success)."
+          }
+        },
+        "required": [
+          "written"
+        ],
+        "additionalProperties": false
       }
     },
     "securitySchemes": {
@@ -1097,7 +1166,7 @@
       },
       "post": {
         "operationId": "createBurrow",
-        "summary": "Provision a project burrow (SPEC §15.1, §16). Loads `burrow.toml` from `projectRoot`, runs doctor, materializes the workspace worktree, and inserts the burrow row with its resolved sandbox profile. Returns 201 with the new `Burrow`.",
+        "summary": "Provision a project burrow (SPEC §15.1, §16). Loads `burrow.toml` from `projectRoot`, runs doctor, materializes the workspace worktree, and inserts the burrow row with its resolved sandbox profile. When a `seed` payload is included, its files are written into the workspace before the burrow is returned (atomic with provisioning, single round-trip). Returns 201 with the new `Burrow`.",
         "tags": [
           "burrows"
         ],
@@ -1323,6 +1392,130 @@
           },
           "404": {
             "description": "Error envelope (`not_found`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/burrows/{id}/files": {
+      "post": {
+        "operationId": "writeFiles",
+        "summary": "Write files into a burrow's workspace (R-07). Same path-validation contract as `POST /burrows` with `seed`: workspace-relative paths only, no `..` traversal, no symlink escapes, no overwrites of `.git/` or sandbox-owned paths. The batch is all-or-nothing — a single rejected entry returns 400 with no partial writes.",
+        "tags": [
+          "burrows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^bur_"
+            },
+            "required": true,
+            "description": "Burrow id, e.g. `bur_a3f9`."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriteFilesBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Write succeeded. Body reports the count for caller-side sanity checks.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteFilesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error envelope (`validation_error on bad path or rejected file`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error envelope (`not_found`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "readFile",
+        "summary": "Read a single file from a burrow's workspace (R-07). Same path-validation contract as `POST /burrows/{id}/files` — workspace-relative only, no traversal or symlink escapes. Used by orchestrators (e.g. warren) to reap mulch records and other run outputs back over the wire.",
+        "tags": [
+          "burrows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^bur_"
+            },
+            "required": true,
+            "description": "Burrow id, e.g. `bur_a3f9`."
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "description": "Workspace-relative path of the file to read."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file. `contents` is decoded per `encoding` (UTF-8 by default; `base64` for binary).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error envelope (`validation_error on bad path`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error envelope (`not_found (burrow or file)`).",
             "content": {
               "application/json": {
                 "schema": {
