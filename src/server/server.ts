@@ -35,6 +35,16 @@ const AUTH_EXEMPT_PATHS = new Set<string>(["/healthz", "/openapi.html"]);
 const DEFAULT_TRANSPORT: Transport = { kind: "tcp", hostname: "127.0.0.1", port: 0 };
 
 /**
+ * Disable Bun.serve's per-request idle timeout (default 10s). The streaming
+ * surfaces (`/burrows/:id/events`, `/runs/:id/stream`, `/watch`) hold the
+ * connection open across long quiet stretches between events; with the
+ * default, Bun force-closes after 10s of silence and clients (warren's
+ * bridgeRunStream — see warren-b8fc) see ECONNRESET. Other routes complete
+ * fast enough that the absence of an idle timeout is irrelevant.
+ */
+const IDLE_TIMEOUT_DISABLED = 0;
+
+/**
  * Boot a Bun server. `client` is the same `Client` a library caller would
  * hold; the server never opens its own — keeping the lifetime explicit on
  * the caller side mirrors how the CLI commands work.
@@ -89,7 +99,7 @@ function bindTcp(
 	port: number,
 	fetch: (req: Request) => Promise<Response>,
 ): ServeServer {
-	return Bun.serve({ hostname, port, fetch });
+	return Bun.serve({ hostname, port, fetch, idleTimeout: IDLE_TIMEOUT_DISABLED });
 }
 
 function bindUnix(path: string, fetch: (req: Request) => Promise<Response>): ServeServer {
@@ -103,7 +113,12 @@ function bindUnix(path: string, fetch: (req: Request) => Promise<Response>): Ser
 			// Let Bun.serve produce the canonical error if the path can't be cleared.
 		}
 	}
-	return Bun.serve({ unix: path, fetch });
+	// bun-types' UnixServeOptions omits idleTimeout, but the runtime honors it
+	// for unix-socket servers identically to TCP (Bun docs §"idleTimeout"). The
+	// XOR with HostnamePortServeOptions actively forbids it on the unix branch,
+	// so suppress and pass through to the runtime.
+	// @ts-expect-error -- bun-types omits idleTimeout from UnixServeOptions; runtime supports it.
+	return Bun.serve({ unix: path, fetch, idleTimeout: IDLE_TIMEOUT_DISABLED });
 }
 
 function formatUrl(transport: Transport): string {
