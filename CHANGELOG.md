@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-05-09
+
+### Fixed
+
+- **bwrap argv now forces `--uid`/`--gid` on the sandboxed pid 1
+  (`burrow-0329`).** Without these, `--unshare-all`'s new userns
+  inherits the caller's uid mapping; on a root-running host (e.g.
+  warren's Dockerized posture without an explicit `USER` directive)
+  the agent saw `getuid() == 0` and `claude-code --dangerously-skip-permissions`
+  refused to start with `cannot be used with root/sudo privileges`.
+  `buildBwrapArgv` now emits `--uid <n> --gid <n>` immediately after
+  `--unshare-all`, defaulting to a non-root constant
+  (`DEFAULT_SANDBOX_UID`/`_GID` = 1000). Callers that need a different
+  uid (e.g. matching an image's existing user) override via
+  `SandboxProfile.runAsUid` / `runAsGid`. Closes the last gate that
+  was blocking warren Scenario 04 end-to-end claude-code runs.
+
 ## [0.2.2] - 2026-05-09
 
 ### Added
