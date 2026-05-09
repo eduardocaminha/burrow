@@ -20,6 +20,11 @@ import { dirname } from "node:path";
 import { ValidationError } from "../../core/errors.ts";
 import type { Client } from "../../lib/client.ts";
 import type { Logger } from "../../logging/logger.ts";
+import {
+	type RunDispatcherHandle,
+	type RunDispatcherOptions,
+	startRunDispatcher,
+} from "../../runner/dispatcher.ts";
 import { resolveAuth } from "../../server/auth.ts";
 import { startServer } from "../../server/server.ts";
 import type { Transport } from "../../server/types.ts";
@@ -49,6 +54,13 @@ export interface ServeCommandInput {
 	env?: Record<string, string | undefined>;
 	/** Logger override (tests). Defaults to `client.logger`. */
 	logger?: Logger;
+	/**
+	 * Test seams forwarded to the in-process `RunDispatcher` (spawn, proxy
+	 * starter, install check). Production callers leave this unset; tests
+	 * set `spawn` to a fake implementation so HTTP-driven runs don't shell
+	 * out to bwrap/sandbox-exec on the host.
+	 */
+	dispatcherOptions?: Pick<RunDispatcherOptions, "spawn" | "startProxy" | "installCheck">;
 }
 
 export interface ServeCommandSummary {
@@ -57,6 +69,12 @@ export interface ServeCommandSummary {
 	/** Resolved transport (TCP entry has the actual bound port if 0 was passed). */
 	transport: Transport;
 	authMode: "bearer" | "none";
+	/**
+	 * Crash-recovery summary from the in-process `RunDispatcher`. Captures
+	 * the rows the startup sweep flipped to terminal so callers (and tests)
+	 * can confirm the dispatcher actually booted.
+	 */
+	recovered: { failedRunIds: string[]; resetMessageIds: string[] };
 }
 
 export async function runServeCommand(input: ServeCommandInput): Promise<ServeCommandSummary> {
@@ -76,12 +94,34 @@ export async function runServeCommand(input: ServeCommandInput): Promise<ServeCo
 	});
 
 	const logger = input.logger ?? input.client.logger;
-	const handle = startServer(input.client, { transport, auth, logger });
+	// Dispatcher boots BEFORE the HTTP listener so:
+	//   1. crash-recovery's `failAllRunning` sweep finishes before the
+	//      first request lands, so a client polling /runs/:id never sees a
+	//      stale `running` row from the previous process.
+	//   2. the create-time hook is installed before `client.runs.create`
+	//      can be reached over HTTP — no run can sneak past the dispatcher.
+	const dispatcherOptions: RunDispatcherOptions = { logger };
+	if (input.dispatcherOptions?.spawn) dispatcherOptions.spawn = input.dispatcherOptions.spawn;
+	if (input.dispatcherOptions?.startProxy)
+		dispatcherOptions.startProxy = input.dispatcherOptions.startProxy;
+	if (input.dispatcherOptions?.installCheck)
+		dispatcherOptions.installCheck = input.dispatcherOptions.installCheck;
+	const dispatcher: RunDispatcherHandle = startRunDispatcher(input.client, dispatcherOptions);
+	const recovered = dispatcher.start().recovered;
+
+	let handle: Awaited<ReturnType<typeof startServer>>;
+	try {
+		handle = startServer(input.client, { transport, auth, logger });
+	} catch (err) {
+		await dispatcher.stop({ force: true });
+		throw err;
+	}
 
 	const summary: ServeCommandSummary = {
 		url: handle.url,
 		transport: handle.transport,
 		authMode: input.options.noAuth ? "none" : "bearer",
+		recovered,
 	};
 
 	emitStartupBanner(summary, input);
@@ -89,7 +129,11 @@ export async function runServeCommand(input: ServeCommandInput): Promise<ServeCo
 	try {
 		await waitForAbort(input.signal);
 	} finally {
+		// HTTP first so no new runs can be enqueued while the dispatcher
+		// is draining; then dispatcher with `force` so in-flight handlers
+		// see the abort and tear their spawned subprocess down.
 		await handle.stop();
+		await dispatcher.stop({ force: true });
 	}
 
 	return summary;

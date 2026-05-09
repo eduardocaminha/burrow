@@ -4,8 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 import { ValidationError } from "../../core/errors.ts";
+import type { Run } from "../../core/types.ts";
 import { Client } from "../../lib/client.ts";
 import { createLogger } from "../../logging/logger.ts";
+import type { SandboxProfile, SpawnResult } from "../../provider/types.ts";
+import type { SpawnFn } from "../../runner/dispatch.ts";
+import type { AgentRuntime } from "../../runtime/runtime.ts";
 import { parsePort, resolveTransport, runServeCommand } from "./serve.ts";
 
 const silentLogger = createLogger({ level: "fatal" });
@@ -273,6 +277,105 @@ describe("runServeCommand", () => {
 		expect(envelope.authMode).toBe("none");
 		expect(envelope.pid).toBe(process.pid);
 		expect(stdout.text).not.toContain("press Ctrl-C");
+
+		ac.abort();
+		await consumer;
+	});
+
+	test("HTTP-enqueued run executes via the in-process dispatcher (burrow-7b97)", async () => {
+		// Closes burrow-7b97: before this fix, POST /burrows/:id/runs only
+		// inserted a `queued` row — nothing in startServer dequeued it, so
+		// HTTP-driven runs sat indefinitely. The dispatcher wired into
+		// `runServeCommand` now drives those rows to terminal.
+		const stdout = new CollectStream();
+		const ac = new AbortController();
+
+		const profile: SandboxProfile = {
+			workspace: "/ws",
+			readOnlyMounts: [],
+			network: "none",
+			allowedDomains: [],
+			envPassthrough: [],
+			setEnv: {},
+			toolchainPaths: [],
+		};
+		const burrow = client.repos.burrows.create({
+			kind: "project",
+			projectRoot: "/repo",
+			workspacePath: "/ws",
+			branch: "main",
+			provider: "local",
+			profile,
+		});
+		const fakeRuntime: AgentRuntime = {
+			id: "fake",
+			displayName: "Fake",
+			supportsResume: false,
+			buildSpawnCommand: () => ({ argv: ["fake"] }),
+			parseEvents: () => [],
+			installCheck: async () => ({ installed: true }),
+		};
+		client.agents.register(fakeRuntime);
+
+		const fakeSpawn: SpawnFn = async () => {
+			const empty = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.close();
+				},
+			});
+			let resolveExit!: (n: number) => void;
+			const exited = new Promise<number>((r) => {
+				resolveExit = r;
+			});
+			const result: SpawnResult = {
+				pid: 1,
+				stdout: empty,
+				stderr: new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.close();
+					},
+				}),
+				exited,
+				cancel: () => resolveExit(130),
+			};
+			queueMicrotask(() => resolveExit(0));
+			return result;
+		};
+
+		const consumer = runServeCommand({
+			client,
+			options: { port: "0", noAuth: true },
+			signal: ac.signal,
+			stdout,
+			logger: silentLogger,
+			dispatcherOptions: { spawn: fakeSpawn },
+		});
+
+		await waitFor(() => stdout.text.includes("listening on"));
+		const baseUrl = (/listening on (\S+)/.exec(stdout.text)?.[1] ?? "") as string;
+
+		const res = await fetch(`${baseUrl}/burrows/${burrow.id}/runs`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ agentId: "fake", prompt: "hello" }),
+		});
+		expect(res.status).toBe(201);
+		const created = (await res.json()) as Run;
+		// Response is synchronous after enqueue — state may be queued at
+		// this instant; what matters is that the dispatcher subsequently
+		// drives it terminal.
+		expect(created.burrowId).toBe(burrow.id);
+
+		await waitFor(() => {
+			const r = client.runs.get(created.id);
+			return r.state === "succeeded" || r.state === "failed";
+		}, 2000);
+
+		const finalized = client.runs.get(created.id);
+		expect(finalized.state).toBe("succeeded");
+		expect(finalized.exitCode).toBe(0);
+		expect(finalized.startedAt).not.toBeNull();
+		expect(finalized.completedAt).not.toBeNull();
 
 		ac.abort();
 		await consumer;

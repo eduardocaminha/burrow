@@ -245,19 +245,37 @@ export class BurrowsClient {
  * Runs namespace (SPEC §15.2).
  */
 export class RunsClient {
+	private onCreated: ((runId: string) => void) | null = null;
+
 	constructor(
 		private readonly repos: Repos,
 		private readonly bus: EventBus,
 	) {}
 
+	/**
+	 * Register a hook called after every successful `create`. Used by the
+	 * `RunDispatcher` (`burrow serve`'s in-process executor) to learn about
+	 * HTTP-enqueued runs the moment they hit the DB. Single-callback —
+	 * setting again replaces the previous registration; pass `null` to clear.
+	 *
+	 * Intentionally NOT an event-bus subscription: the bus only carries
+	 * persisted `events` rows, and a queued-run notification is a control
+	 * signal, not a tail-able timeline entry.
+	 */
+	setOnCreated(cb: ((runId: string) => void) | null): void {
+		this.onCreated = cb;
+	}
+
 	create(input: RunCreateInput): Run {
 		this.repos.burrows.require(input.burrowId);
-		return this.repos.runs.enqueue({
+		const run = this.repos.runs.enqueue({
 			burrowId: input.burrowId,
 			agentId: input.agentId,
 			prompt: input.prompt,
 			metadata: input.metadata,
 		});
+		this.onCreated?.(run.id);
+		return run;
 	}
 
 	get(id: string): Run {

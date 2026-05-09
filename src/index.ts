@@ -225,6 +225,17 @@ export {
 	startProxy,
 } from "./proxy/server.ts";
 export {
+	type DispatchRunInput,
+	dispatchRun,
+	type SpawnFn as DispatchSpawnFn,
+	type StartProxyFn as DispatchStartProxyFn,
+} from "./runner/dispatch.ts";
+export {
+	type RunDispatcherHandle,
+	type RunDispatcherOptions,
+	startRunDispatcher,
+} from "./runner/dispatcher.ts";
+export {
 	type RunHandler,
 	type RunHandlerContext,
 	RunLoop,

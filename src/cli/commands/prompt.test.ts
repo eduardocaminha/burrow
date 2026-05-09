@@ -473,18 +473,18 @@ describe("runPromptCommand", () => {
 			throw new Error("kaboom");
 		};
 
-		await expect(
-			runPromptCommand({
-				client,
-				burrowId: burrow.id,
-				prompt: "p",
-				options: { agent: "fake", noStream: true },
-				stdout: collectStdout().stream,
-				isTty: false,
-				spawn: failingSpawn,
-				startProxy: fakeProxy,
-			}),
-		).rejects.toThrow(/kaboom/);
+		const result = await runPromptCommand({
+			client,
+			burrowId: burrow.id,
+			prompt: "p",
+			options: { agent: "fake", noStream: true },
+			stdout: collectStdout().stream,
+			isTty: false,
+			spawn: failingSpawn,
+			startProxy: fakeProxy,
+		});
+		expect(result.state).toBe("failed");
+		expect(result.run.errorMessage).toBe("kaboom");
 		expect(stopCalls).toBe(1);
 	});
 
