@@ -142,7 +142,12 @@ async function writeStringStdin(
 	const sink = proc.stdin;
 	if (!sink || typeof sink === "number") return;
 	sink.write(new TextEncoder().encode(stdin));
-	if (!holdStdin) await sink.end();
+	// When holdStdin=true the else branch never runs, and sink.write() alone
+	// only buffers in bun's userland — the bytes never reach the kernel pipe,
+	// so the child blocks forever on its initial read (burrow-029d). Flush
+	// explicitly to push the prompt through before we hand control back.
+	if (holdStdin) await sink.flush();
+	else await sink.end();
 }
 
 function makeCloseStdin(proc: Bun.Subprocess): () => Promise<void> {

@@ -97,6 +97,32 @@ if (isDarwin) {
 			}
 		});
 
+		test("holdStdin=true flushes the initial prompt so the child reads synchronously", async () => {
+			// Regression test for burrow-029d: writeStringStdin used to only call
+			// sink.write() in the holdStdin=true path, leaving bytes buffered in
+			// bun userland — they never reached the kernel pipe and the child
+			// blocked forever on its initial read. The fix is an explicit
+			// sink.flush() before returning.
+			const proc = await runSandboxed(baseProfile(workspace), {
+				argv: ["/bin/cat"],
+				stdin: "hello-from-burrow\n",
+				holdStdin: true,
+			});
+
+			const reader = proc.stdout.getReader();
+			const decoder = new TextDecoder();
+			const timeout = new Promise<never>((_, reject) =>
+				setTimeout(() => reject(new Error("timeout: stdin bytes never reached child")), 3000),
+			);
+			const chunk = await Promise.race([reader.read(), timeout]);
+			expect(chunk.done).toBe(false);
+			expect(decoder.decode(chunk.value)).toContain("hello-from-burrow");
+
+			reader.releaseLock();
+			await proc.closeStdin?.();
+			expect(await proc.exited).toBe(0);
+		});
+
 		test("cancel() kills a long-running child", async () => {
 			const proc = await runSandboxed(baseProfile(workspace), {
 				argv: ["/bin/sleep", "60"],
