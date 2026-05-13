@@ -633,14 +633,17 @@ program
 		"run the HTTP API server (unix socket by default; --port for TCP). SIGINT shuts down cleanly.",
 	)
 	.option("--socket <path>", "bind to a unix socket at <path> (default: <cacheDir>/burrow.sock)")
-	.option("--host <host>", "TCP host (defaults to 127.0.0.1; requires --port)")
+	.option(
+		"--bind-host <host>",
+		"TCP bind interface (defaults to 127.0.0.1; non-loopback requires BURROW_API_TOKEN)",
+	)
 	.option("--port <port>", "TCP port (use 0 for an ephemeral port)")
-	.option("--no-auth", "skip bearer auth (loopback only — never use over public TCP)")
+	.option("--no-auth", "skip bearer auth (loopback only — refused with non-loopback --bind-host)")
 	.option("--json", "emit a machine-readable JSON line on startup")
 	.action(
 		async (opts: {
 			socket?: string;
-			host?: string;
+			bindHost?: string;
 			port?: string;
 			auth?: boolean;
 			json?: boolean;
@@ -650,7 +653,7 @@ program
 				await withClient(async (client) => {
 					const serveOpts: ServeCommandOptions = {};
 					if (opts.socket !== undefined) serveOpts.socket = opts.socket;
-					if (opts.host !== undefined) serveOpts.host = opts.host;
+					if (opts.bindHost !== undefined) serveOpts.bindHost = opts.bindHost;
 					if (opts.port !== undefined) serveOpts.port = opts.port;
 					if (opts.auth === false) serveOpts.noAuth = true;
 					if (opts.json !== undefined) serveOpts.json = opts.json;

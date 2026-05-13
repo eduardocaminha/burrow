@@ -10,7 +10,7 @@ import { createLogger } from "../../logging/logger.ts";
 import type { SandboxProfile, SpawnResult } from "../../provider/types.ts";
 import type { SpawnFn } from "../../runner/dispatch.ts";
 import type { AgentRuntime } from "../../runtime/runtime.ts";
-import { parsePort, resolveTransport, runServeCommand } from "./serve.ts";
+import { isLoopbackHost, parsePort, resolveTransport, runServeCommand } from "./serve.ts";
 
 const silentLogger = createLogger({ level: "fatal" });
 
@@ -68,16 +68,16 @@ describe("resolveTransport", () => {
 		});
 	});
 
-	test("--host + --port → tcp on the requested host", () => {
-		expect(resolveTransport({ host: "0.0.0.0", port: "9000" }, defaults)).toEqual({
+	test("--bind-host + --port → tcp on the requested host", () => {
+		expect(resolveTransport({ bindHost: "0.0.0.0", port: "9000" }, defaults)).toEqual({
 			kind: "tcp",
 			hostname: "0.0.0.0",
 			port: 9000,
 		});
 	});
 
-	test("--host without --port is a ValidationError", () => {
-		expect(() => resolveTransport({ host: "0.0.0.0" }, defaults)).toThrow(ValidationError);
+	test("--bind-host without --port is a ValidationError", () => {
+		expect(() => resolveTransport({ bindHost: "0.0.0.0" }, defaults)).toThrow(ValidationError);
 	});
 
 	test("--socket combined with --port is a ValidationError", () => {
@@ -86,10 +86,29 @@ describe("resolveTransport", () => {
 		);
 	});
 
-	test("--socket combined with --host is a ValidationError", () => {
-		expect(() => resolveTransport({ socket: "/tmp/x.sock", host: "0.0.0.0" }, defaults)).toThrow(
-			ValidationError,
-		);
+	test("--socket combined with --bind-host is a ValidationError", () => {
+		expect(() =>
+			resolveTransport({ socket: "/tmp/x.sock", bindHost: "0.0.0.0" }, defaults),
+		).toThrow(ValidationError);
+	});
+});
+
+describe("isLoopbackHost", () => {
+	test("recognises canonical loopback forms", () => {
+		expect(isLoopbackHost("127.0.0.1")).toBe(true);
+		expect(isLoopbackHost("127.1.2.3")).toBe(true);
+		expect(isLoopbackHost("localhost")).toBe(true);
+		expect(isLoopbackHost("::1")).toBe(true);
+		expect(isLoopbackHost("0:0:0:0:0:0:0:1")).toBe(true);
+	});
+
+	test("rejects bind-all and routable hosts", () => {
+		expect(isLoopbackHost("0.0.0.0")).toBe(false);
+		expect(isLoopbackHost("::")).toBe(false);
+		expect(isLoopbackHost("10.0.0.1")).toBe(false);
+		expect(isLoopbackHost("burrow.internal")).toBe(false);
+		// `128.x.x.x` is one bit outside the 127/8 loopback block.
+		expect(isLoopbackHost("128.0.0.1")).toBe(false);
 	});
 });
 
@@ -219,6 +238,53 @@ describe("runServeCommand", () => {
 
 		ac.abort();
 		const summary = await consumer;
+		expect(summary.authMode).toBe("bearer");
+	});
+
+	test("--bind-host 0.0.0.0 with --no-auth is refused (footgun guard)", async () => {
+		const stdout = new CollectStream();
+		const ac = new AbortController();
+		await expect(
+			runServeCommand({
+				client,
+				options: { bindHost: "0.0.0.0", port: "0", noAuth: true },
+				signal: ac.signal,
+				stdout,
+				logger: silentLogger,
+			}),
+		).rejects.toThrow(ValidationError);
+	});
+
+	test("--bind-host 0.0.0.0 with BURROW_API_TOKEN binds and accepts bearer auth", async () => {
+		const stdout = new CollectStream();
+		const ac = new AbortController();
+
+		const consumer = runServeCommand({
+			client,
+			options: { bindHost: "0.0.0.0", port: "0" },
+			signal: ac.signal,
+			stdout,
+			env: { BURROW_API_TOKEN: "non-loopback-ok" },
+			logger: silentLogger,
+		});
+
+		await waitFor(() => stdout.text.includes("listening on"));
+		const baseUrl = (/listening on (\S+)/.exec(stdout.text)?.[1] ?? "") as string;
+		expect(baseUrl).toMatch(/^http:\/\/0\.0\.0\.0:\d+$/);
+
+		// `0.0.0.0` binds all interfaces, including loopback — exercise via 127.0.0.1.
+		const port = baseUrl.split(":").pop() ?? "";
+		const reachUrl = `http://127.0.0.1:${port}`;
+		const denied = await fetch(`${reachUrl}/burrows`);
+		expect(denied.status).toBe(401);
+		const allowed = await fetch(`${reachUrl}/burrows`, {
+			headers: { authorization: "Bearer non-loopback-ok" },
+		});
+		expect([200, 501]).toContain(allowed.status);
+
+		ac.abort();
+		const summary = await consumer;
+		expect(summary.transport).toEqual({ kind: "tcp", hostname: "0.0.0.0", port: Number(port) });
 		expect(summary.authMode).toBe("bearer");
 	});
 

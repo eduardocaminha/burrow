@@ -11,8 +11,15 @@
  * Default transport is unix at `<paths.cacheDir>/burrow.sock` because the
  * single-host / warren-in-same-container deploy is the canonical posture
  * (SPEC §27). `--port` opts into TCP for cross-container reach. `--socket`
- * and `--port`/`--host` are mutually exclusive — picking one transport keeps
- * the bound URL unambiguous in the startup banner.
+ * and `--port`/`--bind-host` are mutually exclusive — picking one transport
+ * keeps the bound URL unambiguous in the startup banner.
+ *
+ * Non-loopback bind safety (pl-cb3e step 2 / burrow-b160): `--bind-host`
+ * defaults to `127.0.0.1`. When the resolved bind host is anything other
+ * than loopback (`localhost`, `127.0.0.0/8`, `::1`) AND `--no-auth` is set,
+ * startup refuses — exposing burrow on a routable interface without bearer
+ * auth would be a footgun. The operator must set `BURROW_API_TOKEN` to
+ * expose the API over non-loopback TCP.
  */
 
 import { mkdir } from "node:fs/promises";
@@ -31,7 +38,9 @@ import type { Transport } from "../../server/types.ts";
 
 export interface ServeCommandOptions {
 	socket?: string;
-	host?: string;
+	/** TCP bind interface — defaults to `127.0.0.1`. Non-loopback values
+	 * additionally require bearer auth (see runServeCommand). */
+	bindHost?: string;
 	/** Commander hands ports through as strings; we parse them ourselves. */
 	port?: string;
 	noAuth?: boolean;
@@ -81,6 +90,20 @@ export async function runServeCommand(input: ServeCommandInput): Promise<ServeCo
 	const transport = resolveTransport(input.options, {
 		socketPath: input.defaultSocketPath ?? defaultSocketPath(input.client),
 	});
+
+	if (
+		transport.kind === "tcp" &&
+		!isLoopbackHost(transport.hostname) &&
+		(input.options.noAuth ?? false)
+	) {
+		throw new ValidationError(
+			`--no-auth is not allowed when binding to a non-loopback host (--bind-host ${transport.hostname})`,
+			{
+				recoveryHint:
+					"export BURROW_API_TOKEN=<token> and drop --no-auth, or bind to 127.0.0.1 / ::1 / localhost",
+			},
+		);
+	}
 
 	if (transport.kind === "unix") {
 		// `Bun.serve({ unix })` doesn't mkdir-p the parent — a fresh install
@@ -143,11 +166,12 @@ export function resolveTransport(
 	opts: ServeCommandOptions,
 	defaults: { socketPath: string },
 ): Transport {
-	const tcpRequested = opts.host !== undefined || opts.port !== undefined;
+	const tcpRequested = opts.bindHost !== undefined || opts.port !== undefined;
 	const socketRequested = opts.socket !== undefined;
 	if (tcpRequested && socketRequested) {
-		throw new ValidationError("--socket cannot be combined with --host/--port", {
-			recoveryHint: "use --socket for unix transport, or --port (with optional --host) for TCP",
+		throw new ValidationError("--socket cannot be combined with --bind-host/--port", {
+			recoveryHint:
+				"use --socket for unix transport, or --port (with optional --bind-host) for TCP",
 		});
 	}
 	if (socketRequested) {
@@ -155,18 +179,30 @@ export function resolveTransport(
 	}
 	if (tcpRequested) {
 		if (opts.port === undefined) {
-			throw new ValidationError("--host requires --port", {
+			throw new ValidationError("--bind-host requires --port", {
 				recoveryHint:
-					"pass --port <n> alongside --host, or drop --host to use the default 127.0.0.1",
+					"pass --port <n> alongside --bind-host, or drop --bind-host to use the default 127.0.0.1",
 			});
 		}
 		return {
 			kind: "tcp",
-			hostname: opts.host ?? "127.0.0.1",
+			hostname: opts.bindHost ?? "127.0.0.1",
 			port: parsePort(opts.port),
 		};
 	}
 	return { kind: "unix", path: defaults.socketPath };
+}
+
+/**
+ * Loopback predicate for the `--bind-host` safety check. Recognised forms:
+ * `localhost`, the IPv4 loopback block `127.0.0.0/8`, and the IPv6 loopback
+ * `::1` (with its canonical longhand `0:0:0:0:0:0:0:1`). Anything else
+ * (including `0.0.0.0` and `::`, which bind every interface) is non-loopback.
+ */
+export function isLoopbackHost(host: string): boolean {
+	if (host === "localhost") return true;
+	if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
+	return /^127(?:\.\d{1,3}){3}$/.test(host);
 }
 
 export function parsePort(raw: string): number {
