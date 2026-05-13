@@ -10,13 +10,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BurrowRow } from "../db/schema.ts";
 import { Client } from "../lib/client.ts";
 import { createLogger } from "../logging/logger.ts";
 import type { SandboxProfile, SpawnCommand, SpawnResult } from "../provider/types.ts";
+import { parsePiEvents } from "../runtime/parsers/pi.ts";
+import { PI_DEFAULT_MODEL, PI_FORCED_ARGV, piRuntime } from "../runtime/pi.ts";
 import type { AgentRuntime } from "../runtime/runtime.ts";
 import type { SpawnFn } from "./dispatch.ts";
 import { startRunDispatcher } from "./dispatcher.ts";
@@ -274,5 +276,176 @@ describe("startRunDispatcher", () => {
 
 		await waitFor(() => dispatcher.isIdle());
 		await dispatcher.stop();
+	});
+});
+
+// piRuntime end-to-end via golden fixtures (burrow-56bb / pl-5198 step 5).
+//
+// Drives a full enqueue → claim → spawn → parse → persist roundtrip with the
+// REAL `piRuntime` registered and the captured `pi --mode rpc` stdout
+// (src/runtime/parsers/__golden__/) replayed via `fakeSpawn`. The parser
+// tests in src/runtime/parsers/pi.test.ts already cover envelope-by-envelope
+// kind mapping; this layer asserts the dispatcher pipeline itself —
+// argv contract, single RPC prompt line on stdin, every parser-emitted event
+// reaches the events table in order, and the run finalizes succeeded.
+//
+// Note (burrow-5db3): real pi v0.74.0 exits the instant stdin closes
+// (mx-d9b3ad), so end-to-end runs against the actual binary need the
+// dispatcher stdin-hold contract before they produce assistant content.
+// That hazard is orthogonal to this test — fakeSpawn streams the captured
+// stdout regardless of stdin lifecycle, so the dispatcher pipeline is
+// exercised against the same trace pi would emit if stdin-hold were wired.
+const GOLDEN_DIR = join(import.meta.dir, "..", "runtime", "parsers", "__golden__");
+
+function readFixtureLines(name: string): string[] {
+	return readFileSync(join(GOLDEN_DIR, name), "utf8")
+		.split("\n")
+		.filter((l) => l.length > 0);
+}
+
+describe("startRunDispatcher · piRuntime end-to-end (golden fixtures)", () => {
+	let dataDir: string;
+	let client: Client;
+
+	beforeEach(async () => {
+		dataDir = mkdtempSync(join(tmpdir(), "burrow-dispatcher-pi-"));
+		client = await Client.open({ dataDir, configDir: dataDir });
+	});
+
+	afterEach(async () => {
+		await client.close();
+		rmSync(dataDir, { recursive: true, force: true });
+	});
+
+	test("success fixture: argv pinned, RPC prompt on stdin, every parser event persisted", async () => {
+		const burrow = seedActiveBurrow(client);
+		client.agents.register(piRuntime);
+
+		const lines = readFixtureLines("pi-v0.74.0-anthropic-success.jsonl");
+		const calls: CollectedSpawn[] = [];
+
+		const dispatcher = startRunDispatcher(client, {
+			logger: silentLogger,
+			spawn: fakeSpawn({ stdoutLines: lines, calls }),
+			installCheck: async () => ({ installed: true, version: "0.74.0", path: "/usr/local/bin/pi" }),
+		});
+		dispatcher.start();
+
+		const run = client.runs.create({
+			burrowId: burrow.id,
+			agentId: "pi",
+			prompt: "Reply with exactly the single word: ack.",
+		});
+		await waitFor(() => client.runs.get(run.id).state === "succeeded");
+		await dispatcher.stop();
+
+		// Run finalized cleanly.
+		const finalized = client.runs.get(run.id);
+		expect(finalized.state).toBe("succeeded");
+		expect(finalized.exitCode).toBe(0);
+		expect(finalized.errorMessage).toBeNull();
+
+		// Spawn contract: forced argv prefix + pinned model, RPC prompt line on stdin.
+		expect(calls).toHaveLength(1);
+		const command = calls[0]?.command;
+		expect(command).toBeDefined();
+		const argv = command?.argv ?? [];
+		expect(argv.slice(0, PI_FORCED_ARGV.length)).toEqual([...PI_FORCED_ARGV]);
+		const modelIdx = argv.indexOf("--model");
+		expect(modelIdx).toBeGreaterThan(-1);
+		expect(argv[modelIdx + 1]).toBe(PI_DEFAULT_MODEL);
+		expect(typeof command?.stdin).toBe("string");
+		expect(JSON.parse(command?.stdin as string)).toEqual({
+			type: "prompt",
+			message: "Reply with exactly the single word: ack.",
+		});
+
+		// Pipeline fidelity: every parser-emitted event landed in the table,
+		// in fixture order, scoped to this run.
+		const expected = lines.flatMap(parsePiEvents);
+		const persisted = client.repos.events
+			.listByBurrow(burrow.id)
+			.filter((row) => row.runId === run.id);
+		expect(persisted.map((r) => r.kind)).toEqual(expected.map((e) => e.kind));
+		expect(persisted.map((r) => r.stream)).toEqual(expected.map((e) => e.stream));
+
+		// Spot-check the high-value content: the assistant 'ack' text reaches
+		// the events table verbatim.
+		const textEvents = persisted.filter((r) => r.kind === "text");
+		expect(textEvents.length).toBeGreaterThanOrEqual(1);
+		expect(textEvents.at(-1)?.payloadJson).toEqual({ text: "ack" });
+
+		// Thinking block survives the pipeline (non-empty, so not dropped).
+		const thinking = persisted.filter((r) => r.kind === "thinking");
+		expect(thinking.length).toBeGreaterThanOrEqual(1);
+
+		// agent_end lifecycle envelope persisted as state_change/system.
+		const agentEnd = persisted.find((r) => {
+			if (r.kind !== "state_change") return false;
+			const payload = r.payloadJson as { type?: string } | null;
+			return payload?.type === "agent_end";
+		});
+		expect(agentEnd).toBeDefined();
+	});
+
+	test("tools fixture: tool_use + tool_result events flow through dispatcher", async () => {
+		const burrow = seedActiveBurrow(client);
+		client.agents.register(piRuntime);
+
+		const lines = readFixtureLines("pi-v0.74.0-anthropic-tools.jsonl");
+
+		const dispatcher = startRunDispatcher(client, {
+			logger: silentLogger,
+			spawn: fakeSpawn({ stdoutLines: lines }),
+			installCheck: async () => ({ installed: true, version: "0.74.0", path: "/usr/local/bin/pi" }),
+		});
+		dispatcher.start();
+
+		const run = client.runs.create({
+			burrowId: burrow.id,
+			agentId: "pi",
+			prompt: "List the files and stop.",
+		});
+		await waitFor(() => client.runs.get(run.id).state === "succeeded");
+		await dispatcher.stop();
+
+		expect(client.runs.get(run.id).state).toBe("succeeded");
+
+		const persisted = client.repos.events
+			.listByBurrow(burrow.id)
+			.filter((row) => row.runId === run.id);
+
+		// Whole-pipeline fidelity vs. the parser as source-of-truth.
+		const expected = lines.flatMap(parsePiEvents);
+		expect(persisted.map((r) => r.kind)).toEqual(expected.map((e) => e.kind));
+
+		// tool_use carries the camelCase pi block verbatim — name + arguments
+		// must reach the events table for downstream consumers (greenhouse,
+		// warren UI) to render the tool invocation.
+		const toolUses = persisted.filter((r) => r.kind === "tool_use");
+		expect(toolUses.length).toBeGreaterThanOrEqual(1);
+		expect(toolUses[0]?.payloadJson).toMatchObject({
+			type: "toolCall",
+			name: "ls",
+		});
+
+		// tool_result mapped from the role=toolResult message_end, on the
+		// stdout stream (matching claude-code's tool_result placement).
+		const toolResults = persisted.filter((r) => r.kind === "tool_result");
+		expect(toolResults.length).toBeGreaterThanOrEqual(1);
+		expect(toolResults[0]?.stream).toBe("stdout");
+		expect(toolResults[0]?.payloadJson).toMatchObject({
+			role: "toolResult",
+			toolName: "ls",
+		});
+
+		// tool_execution_start/end land on system as state_change (lossy
+		// collapse — full envelope preserved in payload).
+		const execStart = persisted.find((r) => {
+			if (r.kind !== "state_change") return false;
+			const payload = r.payloadJson as { type?: string } | null;
+			return payload?.type === "tool_execution_start";
+		});
+		expect(execStart).toBeDefined();
 	});
 });
