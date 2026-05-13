@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **piRuntime spawn latency: pin `--offline` to skip pi's startup
+  network operations (`burrow-029d`).** Inside bwrap (warren docker
+  image) pi v0.74.0 sat in `ep_poll` for 2+ minutes after spawn before
+  emitting its first RPC event, because pi's startup telemetry /
+  update-check calls block the RPC read loop. `PI_FORCED_ARGV` now
+  includes `--offline` (equivalent to `PI_OFFLINE=1`) — burrow runs are
+  headless and don't surface those banners anyway, so disabling is pure
+  latency win.
+
 ## [0.2.9] - 2026-05-13
 
 ### Added

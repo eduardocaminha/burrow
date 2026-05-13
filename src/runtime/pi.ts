@@ -24,6 +24,16 @@
  *                               hangs on auto-discovered extensions
  *                               (workspace `.pi/extensions/`, user
  *                               `~/.pi/extensions/`).
+ *   - `--offline`             — disable pi's startup network operations
+ *                               (telemetry, update checks, etc.; same as
+ *                               `PI_OFFLINE=1`). Without this, pi sits in
+ *                               `ep_poll` for 2+ minutes after spawn
+ *                               inside bwrap before emitting its first
+ *                               RPC event, because those startup calls
+ *                               block before pi's stdin reader processes
+ *                               the prompt (burrow-029d). Burrow runs are
+ *                               headless and don't surface update banners,
+ *                               so skipping is pure latency win.
  *   - `--provider anthropic`  — pi's CLI default provider is Gemini;
  *                               omitting this would silently bill
  *                               GEMINI_API_KEY against a runtime declared
@@ -129,6 +139,7 @@ export const PI_FORCED_ARGV: readonly string[] = [
 	"--session-dir",
 	PI_SESSION_DIR,
 	"--no-extensions",
+	"--offline",
 	"--provider",
 	PI_DEFAULT_PROVIDER,
 ] as const;

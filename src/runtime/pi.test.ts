@@ -112,6 +112,7 @@ describe("piRuntime.buildSpawnCommand", () => {
 			"--session-dir",
 			PI_SESSION_DIR,
 			"--no-extensions",
+			"--offline",
 			"--provider",
 			PI_DEFAULT_PROVIDER,
 		]);
@@ -319,6 +320,7 @@ describe("buildPiArgv", () => {
 			"--session-dir",
 			PI_SESSION_DIR,
 			"--no-extensions",
+			"--offline",
 			"--provider",
 			PI_DEFAULT_PROVIDER,
 		]);
