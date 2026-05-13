@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Built-in `pi` runtime — fourth headless coding agent
+  (`burrow-8aff`, plan `pl-5198`).** Burrow now ships a built-in `pi`
+  runtime (`@earendil-works/pi-coding-agent` pinned at `v0.74.0`)
+  alongside `claude-code`, `sapling`, and `codex`.
+  `BUILT_IN_RUNTIMES` (`src/runtime/registry.ts`) now has four entries
+  and `AGENT_ALIASES` (`src/runtime/aliases.ts`) carries the `pi`
+  identity. The forced argv prefix is locked at `pi --mode rpc
+  --no-session --no-extensions --provider anthropic` with
+  `--model claude-haiku-4-5` appended (pinned to the model the parser's
+  golden RPC fixtures were captured against): `--mode rpc` flips pi to
+  its JSONL command/event protocol; `--no-session` keeps V1 one-shot
+  (`supportsResume:false`); `--no-extensions` blocks pi's
+  `extension_ui_request` RPC dialog (the dispatcher has no path to
+  answer mid-stream UI requests, so an auto-discovered extension would
+  hang the run); `--provider anthropic` overrides pi's Gemini CLI
+  default so the `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` /
+  `ANTHROPIC_BASE_URL` envPassthrough contract actually authenticates.
+  Per-run wire payload is a single
+  `{"type":"prompt","message":"<prompt + steering prefix>"}` line on
+  stdin; steering messages render as the existing `[STEERING]
+  (priority: P) <body>` prefix (parity with sapling/codex). The new
+  parser at `src/runtime/parsers/pi.ts` collapses pi's wider RPC
+  vocabulary (`agent_*`, `turn_*`, `message_start`/`update`/`end`,
+  `tool_execution_*`, `queue_update`, `compaction_*`, `auto_retry_*`,
+  `extension_error`, `extension_ui_request`, `response` acks) into the
+  SPEC §14.1 stable kinds (`text`, `thinking`, `tool_use`,
+  `tool_result`, `telemetry`, `state_change`) with the full original
+  envelope preserved in `payload` — see the new SPEC §14.1 footnote for
+  the full collapse map. The devcontainer image bakes pi at the pinned
+  version via `bun install -g @earendil-works/pi-coding-agent@0.74.0`
+  (`.devcontainer/Dockerfile`). A golden RPC-handshake compatibility
+  test (`src/runtime/parsers/pi-handshake.test.ts`) locks the canonical
+  argv + per-event collapse against checked-in fixtures so a silent
+  upstream wire-shape drift fails CI. Resume parity, mid-run steering,
+  and event-kind promotion (e.g. `compaction` as a first-class kind)
+  are tracked as follow-up seeds; the dispatcher's stdin-close-on-end
+  semantics (which currently end pi before assistant content streams)
+  are tracked separately under `burrow-5db3`.
+
 ## [0.2.7] - 2026-05-09
 
 ### Fixed

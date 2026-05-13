@@ -655,6 +655,7 @@ export interface SpawnContext {
 - **`claude-code`** — Spawn-per-turn. Uses `claude --output-format stream-json --input-format stream-json`. Steering messages delivered as user turns over stdin between agent turns. Deploys a `.claude/settings.local.json` with PreToolUse guards via `prepareWorkspace`.
 - **`sapling`** — Spawn-per-turn. Native NDJSON event stream. Reuses the harness already used by overstory/mycelium.
 - **`codex`** — One-shot. `codex exec --prompt-file ...`. `supportsResume = false`. Steering messages defer to the next *run*.
+- **`pi`** — Spawn-per-turn. `pi --mode rpc --no-session --no-extensions --provider anthropic --model <pinned>` (pinned to a Claude model that matches the parser's golden RPC fixtures). One `{"type":"prompt","message":"<prompt + steering prefix>"}` line on stdin per run; events stream on stdout. `supportsResume = false` in V1; steering messages defer to the next *run*. Wider RPC vocabulary is collapsed into the SPEC §14.1 taxonomy (see §14.1 footnote).
 
 ### 12.3 Declarative adapters (`AgentConfig`)
 
@@ -754,6 +755,22 @@ Opens a TTY where stdin lines are sent as messages and the burrow's event stream
 ```
 
 The envelope is **stable**. Adding a new `kind` is additive; consumers ignore unknown kinds.
+
+> **Footnote — runtime event-kind collapse.** Some built-in runtimes emit a
+> wider native vocabulary than the kinds above; their parsers collapse the
+> extra envelopes losslessly into existing kinds with the full original
+> envelope preserved in `payload`. The `pi` runtime
+> (`src/runtime/parsers/pi.ts`) is the V1 example: assistant `message_end`
+> content blocks expand to `text` / `thinking` / `tool_use`; `toolResult`
+> messages become `tool_result`; streaming envelopes (`message_update`,
+> `queue_update`, `auto_retry_*`) map to `telemetry` on the `system`
+> stream; lifecycle and exceptional envelopes (`agent_*`, `turn_*`,
+> `compaction_*`, `extension_*`, RPC `response` acks, plus assistant /
+> user `message_start` and `tool_execution_*`) map to `state_change` on
+> the `system` stream; unknown envelope types fall through to
+> `state_change`. Promoting any of these (e.g. `compaction` to a
+> first-class kind) is non-breaking because the envelope is already in
+> `payload` — matching the additive-only posture above.
 
 ### 14.2 CLI
 
@@ -1128,7 +1145,7 @@ Drizzle schema, migrations, repos. `events` / `runs` / `messages` / `burrows` ta
 `git worktree` for project burrows, `git clone` fallback, `burrow fork` for task burrows.
 
 ### Phase 4 — Agent runtimes (2-3 days)
-`AgentRuntime` interface. Built-ins: `claude-code` (spawn-per-turn, NDJSON, settings.local.json hooks), `sapling`, `codex`. Declarative `AgentConfig` adapter for the long tail.
+`AgentRuntime` interface. Built-ins: `claude-code` (spawn-per-turn, NDJSON, settings.local.json hooks), `sapling`, `codex`, `pi` (spawn-per-turn, JSON-RPC over stdin/stdout). Declarative `AgentConfig` adapter for the long tail.
 
 ### Phase 5 — Inbox + steering (1 day)
 `messages` table, `burrow send`, `burrow chat`, inbox-injection on next turn for spawn-per-turn runtimes.
