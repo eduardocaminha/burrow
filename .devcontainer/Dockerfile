@@ -59,6 +59,15 @@ RUN curl -fsSL https://bun.sh/install | bash
 # container starts. Auth happens on first run (`claude` walks the user through).
 RUN bun install -g @anthropic-ai/claude-code
 
+# Pi coding agent CLI, baked in so `pi` is on PATH for the built-in piRuntime
+# (src/runtime/pi.ts). Version is tight-pinned to 0.74.0 — the runtime's RPC
+# event parser (src/runtime/parsers/pi.ts) is locked to that wire shape via
+# golden fixtures under src/runtime/parsers/__golden__/, and pi is still
+# pre-1.0 so a minor bump can silently reshape the JSONL stream (pl-5198 risk
+# #4). Auth: ANTHROPIC_API_KEY on the host (V1 is API-key-only; subscription
+# /login is a follow-up).
+RUN bun install -g @earendil-works/pi-coding-agent@0.74.0
+
 # Mulch + Seeds CLIs. CLAUDE.md mandates `ml prime` / `sd prime` at session
 # start and `sd close` / `sd sync` at session end, so the canonical dev
 # environment must ship them. Versions pinned to the ones CLAUDE.md references
