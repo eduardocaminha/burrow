@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-05-13
+
+### Fixed
+
+- **`encodePiStdin` / `encodeInboxMessage` terminate every RPC envelope
+  with `\n` (`burrow-faf5`).** Pi's `--mode rpc` is line-delimited: it
+  buffers stdin and only fires a parsed command on `\n`. The previous
+  `lines.join("\n")` left the single-prompt case (every fresh run with
+  no steering messages) one byte short, so after `burrow-029d`'s flush
+  fix delivered the bytes, pi still parked in `epoll_pwait2` waiting
+  for the terminator — initialized far enough to scaffold
+  `.pi/agent/auth.json` and spin libuv workers, but never reached
+  inference. `encodeSteeringMessage` already appended `\n` per envelope;
+  this mirrors that convention everywhere (`lines.map(l => l + "\n").join("")`).
+
 ## [0.2.11] - 2026-05-13
 
 ### Fixed
