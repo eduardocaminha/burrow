@@ -9,6 +9,7 @@ Production deployment guide for `burrow serve`. Local single-machine use needs n
 - **Default: run `burrow serve` directly on a Linux host.** A VM, Fly Machine, EC2 instance, or bare metal box. No outer container. Modern kernels support unprivileged user namespaces out of the box; bwrap nests cleanly with no admission-policy negotiation.
 - **Acceptable: run `burrow serve` inside a container** (Docker, self-managed Kubernetes, single-tenant ECS) **with four security flags.** This is the warren container's posture and the local devcontainer's posture; it works, but the relaxations partly defeat the point of nesting and require a privileged-workload waiver in most multi-tenant clusters.
 - **Don't: run `burrow serve` inside a managed multi-tenant pod** (Cloud Run, ECS Fargate with default policy, GKE Autopilot, or any cluster where you can't grant the four flags). The admission policy will reject the workload, and even if it didn't, the four flags relax the outer container further than most multi-tenant clusters tolerate.
+- **Scaling out: one `burrow serve` per host, fronted by a TLS-terminating reverse proxy, behind a control plane** like [warren](../warren/SPEC.md) that picks which worker owns each new burrow. See [Multi-worker topology](#multi-worker-topology) below — the threat model is a VPC-private network with bearer-auth gating each worker.
 
 ## Why on-host is preferred
 
@@ -192,14 +193,148 @@ sudo -u burrow burrow up --project /var/lib/burrow/test-repo
 
 If `burrow up` fails with `bwrap: unshare(CLONE_NEWUSER): Operation not permitted`, the userns gate is closed — recheck the prerequisites. If it fails with `bwrap: Can't mount proc on /newroot/proc`, you're inside a container missing `systempaths=unconfined`.
 
-## Reverse proxy (cross-host access)
+## Multi-worker topology
 
-`burrow serve` does not terminate TLS or implement multi-user auth. For cross-host access, front it with Caddy / nginx / Fly's edge:
+A single `burrow serve` process is one host's worth of capacity: bwrap (or sandbox-exec on dev hosts) runs the agent inline, the dispatcher and HTTP listener share one Bun process, and SQLite owns the per-host state. Scaling past one host means running N workers — one `burrow serve` per host — and putting a control plane (typically [warren](../warren/SPEC.md)) in front to pick which worker owns each new burrow.
+
+```
+        ┌────────────────────────┐
+        │  warren (control plane)│
+        └────────────┬───────────┘
+                     │  HTTPS + Bearer
+        ┌────────────┼────────────┐
+        │            │            │
+    ┌───▼───┐    ┌───▼───┐    ┌───▼───┐
+    │worker1│    │worker2│    │worker3│
+    │ proxy │    │ proxy │    │ proxy │ ← Caddy / nginx (TLS terminator)
+    │   │   │    │   │   │    │   │   │
+    │ burrow│    │ burrow│    │ burrow│ ← burrow serve, loopback or unix
+    │ serve │    │ serve │    │ serve │
+    │ + DB  │    │ + DB  │    │ + DB  │ ← per-worker SQLite, per-worker
+    └───────┘    └───────┘    └───────┘   sandboxes — no shared state
+```
+
+### Threat model and what burrow does / doesn't ship
+
+V1 assumes a **VPC-private network** between the control plane and the workers — Tailscale, an AWS VPC, a Fly private 6PN, an internal Kubernetes service mesh. The bearer-auth boundary is gating a network the operator already controls.
+
+What `burrow serve` ships:
+
+- **Bearer auth** via `BURROW_API_TOKEN` env (a single shared secret per worker).
+- **`--bind-host` safety check.** `--bind-host` defaults to `127.0.0.1`. If you pass a non-loopback host (e.g. `0.0.0.0`, a private IP) AND set `--no-auth`, startup refuses with a `ValidationError` pointing at `BURROW_API_TOKEN`. The operator has to consciously turn the bearer on to expose burrow over TCP.
+- **One unix-socket or TCP listener per worker.** No admin port; the bearer-auth boundary is the security perimeter.
+
+What burrow does **not** ship (operator's job):
+
+- **TLS termination.** Burrow speaks plain HTTP; put a reverse proxy on each worker that terminates TLS (recipe below). The proxy is the only thing the control plane talks to over the network.
+- **mTLS.** Not in V1. Tracked as a future hardening item.
+- **Per-user / per-worker tokens.** A single `BURROW_API_TOKEN` is shared across the worker pool. Rotation is one env-var update across N workers + the control plane; document it in your runbook. Per-worker tokens are a future hardening item.
+
+### Topology choices
+
+| Shape | When to use |
+|---|---|
+| **Co-tenanted: warren + burrow on the same host, unix socket** | Default single-host posture (warren's container, a single VM). Warren talks to `/run/burrow/burrow.sock` directly — no TLS, no bearer, kernel ACLs gate access. This is what the [reference systemd unit](#reference-systemd-unit) ships. |
+| **Cross-host: warren on one host, burrow workers on N hosts** | Horizontal scale. Each worker binds a TCP port behind a per-worker reverse proxy on `:443`. Warren holds the bearer and an HTTPS URL per worker. **This is the topology the rest of this section covers.** |
+
+### Worker config: bind to a non-loopback interface
+
+Per-worker, replace the unix-socket flag with `--bind-host` and `--port`:
+
+```ini
+# /etc/systemd/system/burrow.service  (cross-host worker)
+ExecStart=/usr/local/bin/burrow serve --bind-host 127.0.0.1 --port 4040
+```
+
+Keep `--bind-host` on **loopback** — the reverse proxy on the same host terminates TLS and forwards to it. Don't expose `--bind-host 0.0.0.0` on a worker that already has a TLS proxy; the proxy is the only thing that should hit the burrow listener.
+
+If your topology *doesn't* have a co-located proxy (e.g. you're terminating TLS at a load balancer hop away), bind to a private interface (`--bind-host 10.0.0.5 --port 4040`) and ensure host-firewall rules restrict the port to the control-plane's source. With `--no-auth` set in that posture, `burrow serve` refuses to start — that's the safety gate.
+
+The `BURROW_API_TOKEN` env (loaded from `/etc/burrow/burrow.env`) must be identical across every worker in the pool and on the control-plane host.
+
+### Reverse proxy + TLS termination (per worker)
+
+Both recipes below run on the **same host** as `burrow.service` and front a loopback-bound burrow. Pick one.
+
+**Caddy** (automatic Let's Encrypt issuance, simpler config):
+
+```caddyfile
+# /etc/caddy/Caddyfile
+worker-1.burrow.internal {
+  reverse_proxy 127.0.0.1:4040 {
+    # Streaming surfaces (/runs/:id/stream, /burrows/:id/events, /watch) emit
+    # NDJSON over chunked HTTP with idleTimeout=0 on burrow's side; mirror
+    # that on the proxy so long-lived streams don't get reaped.
+    transport http {
+      read_timeout 0
+      write_timeout 0
+    }
+    flush_interval -1
+  }
+}
+```
+
+**nginx** (explicit certs, fine-grained control):
+
+```nginx
+# /etc/nginx/conf.d/burrow.conf
+server {
+  listen 443 ssl http2;
+  server_name worker-1.burrow.internal;
+
+  ssl_certificate     /etc/letsencrypt/live/worker-1.burrow.internal/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/worker-1.burrow.internal/privkey.pem;
+
+  # Streaming surfaces need timeouts disabled and buffering off so warren
+  # sees NDJSON events as they're emitted, not in proxy-flushed chunks.
+  proxy_buffering   off;
+  proxy_read_timeout 0;
+  proxy_send_timeout 0;
+  proxy_http_version 1.1;
+
+  location / {
+    proxy_pass http://127.0.0.1:4040;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
+```
+
+In both cases the control plane's URL is `https://worker-1.burrow.internal/`, and every request carries `Authorization: Bearer $BURROW_API_TOKEN`. The proxy never sees the token (it's an opaque request header to it).
+
+### Rotating the bearer token
+
+Because the pool shares one token, rotation is fan-out, not per-worker. The runbook:
+
+1. Generate a new token: `openssl rand -hex 32`.
+2. On the **control plane**, set the new token as a second valid value if your control plane supports overlapping tokens (warren does not in V1 — see warren's worker config docs). Otherwise schedule a coordinated cutover.
+3. On **each worker**, update `/etc/burrow/burrow.env` and `systemctl restart burrow.service`. Existing in-flight runs persist (they live in SQLite), but in-flight HTTP streams will drop and need reconnect.
+4. Update the control plane's stored token and restart it.
+5. Verify with a `GET /openapi.json` from the control plane to each worker.
+
+For zero-drop rotation, drain each worker before restart (`POST /admin/drain` — shipping in `burrow-79ad`, pl-cb3e step 4) so the control plane stops scheduling new work on that host while existing runs finish.
+
+### Multi-worker invariants
+
+- **One worker per `BURROW_DATA_DIR`.** Concurrent processes would race the startup sweep that flips orphaned `running` rows to `failed`. See [Cross-process dispatch contract](#cross-process-dispatch-contract) below.
+- **State doesn't move between workers.** A burrow lives on the host it was created on; the workspace, the SQLite row, the events, and the in-flight sandbox processes are all per-host. The control plane is responsible for routing follow-up requests (`POST /burrows/:id/runs`, `GET /runs/:id/stream`) to the same worker that owns the burrow.
+- **Restarts are local.** A worker that restarts mid-run flips its own in-flight rows to `failed` on startup. The control plane has to retry by enqueuing a fresh run, not by resurrecting the failed row.
+
+## Reverse proxy (single-host)
+
+For a single worker with co-tenanted consumers on the same host, the `unix://` backend is enough — no TCP port to expose:
 
 ```caddyfile
 # Caddyfile, host running on the same machine as burrow.service
 burrow.example.com {
-  reverse_proxy unix//run/burrow/burrow.sock
+  reverse_proxy unix//run/burrow/burrow.sock {
+    transport http {
+      read_timeout 0
+      write_timeout 0
+    }
+    flush_interval -1
+  }
 }
 ```
 
