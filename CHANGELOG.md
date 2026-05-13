@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-05-13
+
+### Fixed
+
+- **`writeStringStdin` flushes stdin when `holdStdin=true` (`burrow-029d`).**
+  The `holdStdin=true` branch only called `sink.write()`; the else
+  branch's `sink.end()` (which flushes-and-closes) never ran, so
+  bytes stayed buffered in bun userland and never reached the kernel
+  pipe. `pi` (and any future stdin-hold runtime) hung forever on its
+  initial read because burrow had the write fd open and connected but
+  zero bytes had been written through. Now flushes explicitly with
+  `sink.flush()` before returning, matching the discipline
+  `makeWriteStdin` already follows for mid-run steering.
+
 ## [0.2.10] - 2026-05-13
 
 ### Fixed
@@ -549,7 +563,8 @@ coding agents on Linux (`bwrap`) and macOS (`sandbox-exec`).
   and agents (previously empty, breaking PATH inside the sandbox).
 - `burrow destroy` drops the per-burrow branch when tearing down a worktree.
 
-[Unreleased]: https://github.com/jayminwest/burrow/compare/v0.2.10...HEAD
+[Unreleased]: https://github.com/jayminwest/burrow/compare/v0.2.11...HEAD
+[0.2.11]: https://github.com/jayminwest/burrow/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/jayminwest/burrow/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/jayminwest/burrow/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/jayminwest/burrow/compare/v0.2.7...v0.2.8
