@@ -287,10 +287,45 @@ targets. `burrow ship --list` surfaces sources and shadowed built-ins.
 ---
 
 ## R-06 — Substrate integration with Overstory and Mycelium
-Status: [proposed]
+Status: [proposed — needs reframing, see note below]
 Depends on: stable `burrow serve` API (shipped, SPEC §27)
 Unlocks: agents dispatched into burrows from upstream orchestrators; replaces
 overstory/mycelium's tmux dispatch with sandboxed burrows
+
+**Reframing note (2026-05-13).** The two named consumers in this item have
+shifted status since it was filed:
+
+- **Mycelium** is unlikely to be picked up — direction is to fold its
+  functionality into warren rather than keep it as a separate tool.
+- **Overstory** is under reconsideration but not yet deprecated. The broader
+  direction is moving away from hierarchical orchestrators (lead agent
+  delegates to sub-agents delegates to workers) toward a human-as-node /
+  shared-substrate pattern where agents read and write a common substrate
+  (`.seeds/` / `.canopy/` / `.mulch/` / `.warren/`) rather than chaining
+  through layers of delegation. If that pattern wins, overstory's
+  hierarchy-shaped value proposition narrows; if some workloads still want
+  hierarchy, overstory's burrow adoption stays useful.
+- **Warren has already validated the underlying claim** that this item was
+  meant to prove. Warren consumes burrow's HTTP API today (`HttpClient`
+  over unix socket, shipped 0.3.0); it never used tmux. The "upstream tools
+  consume burrow's HTTP API" pattern is shipped in spirit — what's
+  outstanding is just whether overstory specifically adopts it.
+
+Open questions this reframing raises:
+- Does R-06 collapse into "shipped via warren; overstory adoption is
+  contingent on overstory's own future," with mycelium removed from the
+  item entirely? Lean yes — but hold off pending the overstory decision.
+- Are there *other* would-be substrate consumers that justify keeping a
+  generic R-06 open (greenhouse? sapling-as-standalone? third-party tools
+  building on burrow)? If so, rename to "Substrate adoption by upstream
+  consumers" and drop the overstory/mycelium specifics.
+- If overstory is deprecated, does the substrate framing make burrow's
+  primary identity "warren's sandbox runtime" rather than "general
+  sandbox primitive"? Has implications for whether burrow stays its own
+  repo (see warren/burrow merge-vs-split discussion, 2026-05-13).
+
+The original sketch follows for context; treat it as scoped to the
+overstory/mycelium pair, not as a generic substrate-adoption claim.
 
 **Problem.** Today overstory and mycelium dispatch agents into tmux sessions on
 the host. The host has no isolation; a botched agent can touch the user's real
@@ -318,61 +353,44 @@ burrow.
 ---
 
 ## R-07 — Workspace-seed HTTP API
-Status: [proposed]
+Status: [shipped] (burrow side); warren-side adoption pending
 Depends on: —
 Unlocks: warren stops reaching into burrow's workspace path via shared
 filesystem; also prerequisite for R-02 (remote burrows have no shared disk
 to reach into) if/when R-02 is picked up
 
-**Problem.** Warren's current run-spawn flow seeds the burrow workspace by
-writing directly to `burrow.workspacePath` from disk — three drops
-(`.canopy/agent.json`, `.mulch/expertise/*.jsonl`, `.seeds/workflow.txt`,
-all in `warren/src/runs/seed.ts`). Even with warren and burrow co-tenanted
-in one container, this is a seam violation: warren has no API contract for
-"put files in a burrow's workspace," it just reaches past the seam onto
-disk because they happen to share `/data`. Every other warren↔burrow path
-is HTTP with a typed contract; this one isn't. Warren's own SPEC §11.A
-waves at the gap: "invokes `ml record` inside the burrow workspace via
-`burrow exec` (or equivalent)." That equivalent doesn't exist.
+**Resolution.** Shipped as plan `pl-2467` (closed 2026-05-09) across four
+child seeds:
 
-If R-02 is ever picked up, those writes also break outright — remote
-burrows have no shared disk to reach into. But R-02 isn't the reason to
-fix this; warren's current coupling is.
+- `burrow-da98` — OpenAPI schemas + golden test
+- `burrow-9dbd` — Path validation primitive (`src/server/workspace-paths.ts`)
+- `burrow-30c7` — Server handlers: `POST /burrows` with `seed`,
+  `POST /burrows/:id/files`, `GET /burrows/:id/files`
+- `burrow-ba5c` — `HttpClient` methods: `burrows.create({ seed })`,
+  `files.write`, `files.read`
 
-**Sketch.** Add a workspace-mutation surface to burrow's HTTP API. Two
-shapes, both probably wanted:
+Path validation rejects empty paths, NUL bytes, absolute paths, `..`
+traversal, reserved entries (`.git`, `.gitconfig.burrow`), and symlinks
+whose realpath escapes the workspace root. Writers open with `O_NOFOLLOW`
+to close the TOCTOU window. The provision-time seed is atomic: a failed
+seed write rolls back the burrow so the caller never observes a
+half-seeded workspace.
 
-1. **Provision-time seed payload.** `POST /burrows` accepts an optional
-   `seed: { files: [{ path, mode?, contents }, ...] }`. Files written into
-   the new workspace before the burrow returns. Atomic with provisioning,
-   no second round-trip — covers warren's "all three files known at
-   provision" case in one shot.
-2. **Post-provision file API.** `POST /burrows/:id/files` with the same
-   envelope. Allows seeding after provisioning, top-up mid-run, and covers
-   any future use case the provision-time path doesn't.
+Open questions all resolved:
+- ~~Read side included?~~ → Yes; `GET /burrows/:id/files?path=…&encoding=…`
+  ships in the same plan.
+- ~~Binary content?~~ → JSON+base64; multipart deferred until a real
+  consumer needs it.
+- ~~Quota / size limits?~~ → Not enforced in V1; revisit if abuse surfaces.
+- ~~When warren switches over?~~ → Tracked downstream in warren's tracker;
+  burrow side does not gate on it.
 
-Path validation: writes constrained to within `workspacePath`; no symlink
-escape; no overwrite of paths burrow owns (`.git/`, sandbox metadata,
-etc.). Warren consumes via `HttpClient.burrows.create({ ..., seed })` and
-deletes the disk-writing code in `src/runs/seed.ts`. Once R-07 is shipped,
-warren's seed code path is the same local and remote.
-
-**Open questions.**
-- Read side. Warren's reap step (§11.A) also reads `<burrow-workspace>/
-  .mulch/expertise/*.jsonl` off disk. Does R-07 include `GET
-  /burrows/:id/files?path=…`, or is that a separate item? Lean include —
-  same shape, same constraints, ships warren a complete remote-capable
-  seed/reap loop.
-- Binary content. Base64-encode in JSON, or accept multipart? JSON-with-
-  base64 is simpler and covers the only known consumer (text); multipart
-  is the right answer if anyone ever wants to seed a tarball.
-- Quota / size limits. Provision-time seeds shouldn't be unbounded. A 10
-  MB cap per call and 1 MB per file seems fine for everything warren
-  actually seeds today.
-- When warren switches over. Argument for sooner: warren stops violating
-  the seam contract; the API gets load-tested by its real consumer.
-  Argument against: nothing's broken today. Lean sooner — without R-02 on
-  the schedule, R-07 only earns its keep if warren actually adopts it.
+**Remaining work (warren-side).** Warren's `src/runs/seed.ts` still writes
+`.canopy/agent.json`, `.mulch/expertise/*.jsonl`, `.seeds/workflow.txt`
+directly to `burrow.workspacePath` on disk. The reap step in §11.A still
+reads `.mulch/expertise/*.jsonl` back off disk. Both need to switch to
+`HttpClient.burrows.create({ seed })` + `files.read`. Filed as a separate
+seed in the warren repo (2026-05-13).
 
 ---
 
@@ -408,12 +426,12 @@ relitigated when items become seeds issues.
 Threads that run through multiple items.
 
 - **Remote substrate (R-01, R-07, R-06; R-02 deferred).** R-01 picks the
-  deploy posture, R-07 closes the workspace-mutation contract gap that warren
-  is papering over with shared-filesystem writes, R-06 lets upstream tools
-  consume burrow's HTTP API as a substrate. R-02 (remote `BurrowProvider`s)
-  was the original seam load-test, but warren-on-Fly co-locates burrow
-  in-container — so R-02 is deferred until a concrete consumer needs remote
-  burrows.
+  deploy posture, R-07 closes the workspace-mutation contract gap (shipped
+  burrow-side; warren-side adoption is the remaining work), R-06 lets
+  upstream tools consume burrow's HTTP API as a substrate. R-02 (remote
+  `BurrowProvider`s) was the original seam load-test, but warren-on-Fly
+  co-locates burrow in-container — so R-02 is deferred until a concrete
+  consumer needs remote burrows.
 - **Plugin registries (R-05, parallels mulch R-04).** Burrow already takes user
   extension via `[[agents]]`; ship targets are the next surface. Future
   registries (sandbox profiles? secret resolvers?) should follow the same
@@ -429,6 +447,16 @@ Threads that run through multiple items.
 Cross-references to closed work that maps onto post-V1 direction. Tracked here
 so subsequent revisions know what's already off the punch list.
 
+- **R-07 workspace-seed HTTP API** (plan `pl-2467`, closed 2026-05-09).
+  Provision-time `seed` on `POST /burrows` is atomic with provisioning; a
+  failed seed rolls the burrow back. Standalone `POST /burrows/:id/files`
+  and `GET /burrows/:id/files?path=…&encoding=…` cover top-up writes and
+  reaps. Path validation in `src/server/workspace-paths.ts` rejects `..`,
+  absolute paths, reserved entries (`.git`, `.gitconfig.burrow`), and
+  symlink escapes; writes use `O_NOFOLLOW`. `HttpClient` exposes typed
+  `burrows.create({ seed })`, `files.write`, `files.read`. Child seeds:
+  `burrow-da98` / `burrow-9dbd` / `burrow-30c7` / `burrow-ba5c`.
+  Warren-side adoption tracked in warren's tracker.
 - **R-01 deploy posture — [DEPLOY.md](DEPLOY.md)** (burrow-9986). On-host is
   the production default; in-pod is acceptable for self-managed / single-tenant
   / dev-CI postures with the four-flag bwrap recipe (`mx-94901b`, `mx-c085ba`).
@@ -473,10 +501,8 @@ so subsequent revisions know what's already off the punch list.
 A first cut at order of attack — not committed:
 
 1. ~~**R-01** (deploy posture)~~ — shipped, see [DEPLOY.md](DEPLOY.md).
-2. **R-07** (workspace-seed HTTP API) — small, immediately consumed by
-   warren. Closes the workspace-mutation contract gap warren is papering
-   over with shared-filesystem writes, on its own merits (R-02 used to
-   depend on this; with R-02 deferred, R-07 is justified by warren alone).
+2. ~~**R-07** (workspace-seed HTTP API)~~ — shipped burrow-side (plan
+   `pl-2467`); warren-side adoption tracked downstream in warren's tracker.
 3. **R-04** (toolchain auto-install) — valuable for solo and team
    onboarding; orthogonal to everything else.
 4. **R-06** (overstory/mycelium integration) — burrow's HTTP API
