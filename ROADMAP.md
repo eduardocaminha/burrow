@@ -96,7 +96,7 @@ the production-swarm default.
 ---
 
 ## R-02 — FlyProvider + SshProvider (remote `BurrowProvider`s)
-Status: [deferred]
+Status: [superseded by burrow-62ce]
 Depends on: R-01 (shipped — deploy posture in [DEPLOY.md](DEPLOY.md): Fly
 Machines = on-host posture, no four-flag overrides needed); R-07
 (workspace-seed HTTP API — without it, remote burrows have no contract for
@@ -104,7 +104,19 @@ warren to populate `.canopy/`, `.mulch/`, `.seeds/`)
 Unlocks: cloud-deployed burrow swarms; the load-bearing test of the
 `BurrowProvider` seam (SPEC §23)
 
-**Why deferred (2026-05-09).** The original framing claimed warren-on-Fly
+**Superseded (2026-05-13).** `burrow-62ce` + plan `pl-cb3e` deliver the
+same operational goal (multi-host concurrency for warren self-hosting at
+50+ engineer orgs) via a simpler contract: static `[workers]` config + a
+warren-side `BurrowClientPool` over the existing HTTP API, with burrow
+gaining `serve --bind-host`, `POST /admin/drain`, and a multi-worker
+[DEPLOY.md](DEPLOY.md) recipe. No `BurrowProvider` plugin code lands in
+burrow; mTLS stays a future hardening item. R-02's `BurrowProvider` seam
+load-test claim (SPEC §23) remains unverified, but the consumer that was
+supposed to pull on it (warren-on-Fly worker pool) no longer needs the
+seam — config + pool is sufficient. Revisit R-02 only if `burrow up
+--remote my-vps` from a laptop becomes a real workflow.
+
+**Why deferred (2026-05-09; preserved for context).** The original framing claimed warren-on-Fly
 required a remote-daemon model — i.e., warren calling burrow over HTTPS at a
 separate Fly Machine. That misreads warren's actual deploy story. Warren
 SPEC §10.2 + §5.1 + §10.3 deploy warren and `burrow serve` as **sibling
@@ -425,22 +437,28 @@ relitigated when items become seeds issues.
 
 Threads that run through multiple items.
 
-- **Remote substrate (R-01, R-07, R-06; R-02 deferred).** R-01 picks the
-  deploy posture, R-07 closes the workspace-mutation contract gap (shipped
-  burrow-side; warren-side adoption is the remaining work), R-06 lets
-  upstream tools consume burrow's HTTP API as a substrate. R-02 (remote
-  `BurrowProvider`s) was the original seam load-test, but warren-on-Fly
-  co-locates burrow in-container — so R-02 is deferred until a concrete
-  consumer needs remote burrows.
+- **Remote substrate (R-01, R-07, R-06; R-02 superseded by burrow-62ce).**
+  R-01 picks the deploy posture, R-07 closes the workspace-mutation
+  contract gap (shipped burrow-side; warren-side adoption is the remaining
+  work), R-06 lets upstream tools consume burrow's HTTP API as a
+  substrate. R-02 (remote `BurrowProvider`s) was the original seam
+  load-test, but the concrete consumer that ended up needing multi-host
+  concurrency (warren self-hosting, `burrow-62ce` + plan `pl-cb3e`) gets
+  it via static `[workers]` config + a warren-side `BurrowClientPool` over
+  the existing HTTP API rather than a generic provider plugin — so R-02
+  is superseded without delivering the `BurrowProvider` plugin model.
 - **Plugin registries (R-05, parallels mulch R-04).** Burrow already takes user
   extension via `[[agents]]`; ship targets are the next surface. Future
   registries (sandbox profiles? secret resolvers?) should follow the same
   discovery shape.
-- **The seam load-test (R-02, deferred).** Until a second `BurrowProvider`
-  actually exists, SPEC §23's last success criterion ("a future `FlyProvider`
-  can be added without modifying any file under `src/core/`...") stays
-  unverified. The argument holds; what's missing is a consumer that actually
-  needs the seam exercised. Revisit when one shows up.
+- **The seam load-test (R-02, superseded).** Until a second
+  `BurrowProvider` actually exists, SPEC §23's last success criterion ("a
+  future `FlyProvider` can be added without modifying any file under
+  `src/core/`...") stays unverified. The consumer that was supposed to
+  pull on it (warren-on-Fly) ended up not needing the seam (config +
+  pool over the existing HTTP API was simpler). Revisit when a workflow
+  shows up that genuinely requires per-burrow remote provisioning rather
+  than a worker pool.
 
 ## Recently shipped
 
@@ -512,6 +530,9 @@ A first cut at order of attack — not committed:
    interface is exercised by a fourth, user-supplied target.
 6. **R-03** (snapshot / restore) — defer until V1 is stable enough that
    "rewind a burrow" is a meaningful operation rather than rare polish.
-7. **R-02** (FlyProvider + SshProvider) — *deferred*. Pick up when warren
-   V2, greenhouse, or a laptop `burrow up --remote` workflow actually needs
-   remote burrows.
+7. **R-02** (FlyProvider + SshProvider) — *superseded by `burrow-62ce`*.
+   The multi-host concurrency goal ships via static `[workers]` config +
+   a warren-side `BurrowClientPool` over the existing HTTP API. Revisit
+   only if a workflow surfaces (laptop `burrow up --remote my-vps`,
+   greenhouse per-burrow remote provisioning) that genuinely needs a
+   per-burrow `BurrowProvider` plugin rather than a worker pool.
