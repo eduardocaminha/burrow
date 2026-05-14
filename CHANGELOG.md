@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-13
+
+Lands the burrow-side substrate for remote workers (plan `pl-cb3e`,
+parent `burrow-62ce`) — the capability that lets an external warren
+dispatch runs against a burrow on another host. `burrow serve` is now
+formally a multi-host executor: `--bind-host` opens it to a non-loopback
+interface (with a `--no-auth` guard against accidental open exposure),
+`POST /admin/drain` quiesces a worker for rolling deploys, and
+`GET /burrows/:id/files` exposes the workspace tree so warren can render
+PR-like diffs without shelling into the host. Multi-worker topology,
+TLS-at-reverse-proxy, and bind-host posture are now documented end-to-end
+in DEPLOY.md and the OpenAPI spec, and SPEC §27 / ROADMAP R-02 are
+cross-linked to the canonical multi-worker design.
+
+### Added
+
+- **`feat(serve)`** — `--bind-host <host>` flag on `burrow serve` (default
+  `127.0.0.1`, preserving the current localhost-only posture). Non-loopback
+  hosts are rejected at startup when `--no-auth` is also set, so an
+  unauthenticated burrow can never accidentally listen on a public
+  interface (`burrow-b160`, `pl-cb3e` step 2).
+- **`feat(serve)`** — `POST /admin/drain` admin endpoint. While drained,
+  the server returns 503 on new burrow and run creation but keeps
+  serving reads, stream tails, and steering on existing runs so workers
+  can finish in-flight work during a rolling deploy. Drain is process-
+  local state (no DB row) and resets on restart (`burrow-79ad`,
+  `pl-cb3e` step 4).
+- **`feat(server)`** — `GET /burrows/:id/files` returns a listing of the
+  workspace tree (path + size + mtime, gitignore-aware) so warren can
+  render workspace diffs / file previews against a remote burrow without
+  shelling into the worker host (`burrow-18ca`).
+
+### Changed
+
+- **`docs(deploy)`** — DEPLOY.md gains a multi-worker topology section
+  (warren ↔ N burrow workers behind a reverse proxy) plus a TLS-at-
+  reverse-proxy recipe documenting the recommended bearer-token-over-TLS
+  posture (`burrow-f676`, `pl-cb3e` step 3).
+- **`docs(openapi)`** — OpenAPI spec documents `POST /admin/drain` and
+  carries a bind-host posture note alongside the existing auth section,
+  so generated client docs reflect the multi-worker contract
+  (`burrow-37c3`, `pl-cb3e` step 5).
+- **`docs(roadmap+spec)`** — ROADMAP R-02 is marked superseded by
+  `burrow-62ce`; SPEC §27 (multi-host) cross-links to the canonical
+  multi-worker design in `pl-cb3e`. ROADMAP R-07 marked shipped on the
+  burrow side; R-06 reframed (`burrow-d380`, `pl-cb3e` step 6).
+
+### Tests
+
+- **`test(serve)`** — Cross-process e2e test for `burrow serve`'s
+  in-process dispatcher: a sibling Bun subprocess drives the server
+  over HTTP and asserts the run lifecycle end-to-end, locking the
+  contract that the warren executor depends on (`burrow-e2bc`,
+  `pl-cb3e` step 1).
+
 ## [0.2.12] - 2026-05-13
 
 ### Fixed
