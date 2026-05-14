@@ -395,6 +395,46 @@
         ],
         "additionalProperties": false
       },
+      "CreateSidecarBody": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Argv to launch inside the sandbox. The sidecar inherits the burrow's `SandboxProfile` (network policy, ro-binds, workspace bind)."
+          },
+          "env": {
+            "description": "Extra env to merge on top of the profile's resolved env.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "cwd": {
+            "description": "Working directory inside the sandbox. Relative to `/workspace`; absolute paths must already be visible to the sandbox profile. Defaults to `/workspace`.",
+            "type": "string"
+          },
+          "inboundPortForward": {
+            "description": "Optional inbound TCP forward. When set, burrow binds `127.0.0.1:hostPort` on the host and pipes accepted connections into `127.0.0.1:sandboxPort` inside the sandbox's network namespace. Linux uses a Bun-native `nsenter`+`nc` per-connection relay; macOS is a no-op (the forward is implicit and `host_port_bound` returns false).",
+            "$ref": "#/components/schemas/InboundPortForward"
+          },
+          "readinessPath": {
+            "description": "Advisory HTTP path the caller may poll once the sidecar is `live`. Burrow does not gate on readiness — the caller (e.g. warren's preview proxy) is responsible for polling.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
       "DashboardSnapshot": {
         "type": "object",
         "properties": {
@@ -633,6 +673,28 @@
         },
         "required": [
           "ok"
+        ],
+        "additionalProperties": false
+      },
+      "InboundPortForward": {
+        "type": "object",
+        "properties": {
+          "hostPort": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "description": "Host-side loopback port the forwarder binds at `127.0.0.1:hostPort`. Caller (e.g. warren) allocates; burrow plumbs."
+          },
+          "sandboxPort": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "description": "Port the sidecar process binds at `127.0.0.1:sandboxPort` inside the sandbox."
+          }
+        },
+        "required": [
+          "hostPort",
+          "sandboxPort"
         ],
         "additionalProperties": false
       },
@@ -961,6 +1023,116 @@
         ],
         "additionalProperties": false
       },
+      "Sidecar": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "burrowId": {
+            "type": "string"
+          },
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "starting",
+              "live",
+              "exited",
+              "failed",
+              "torn-down"
+            ]
+          },
+          "startedAt": {
+            "type": "string",
+            "description": "ISO-8601 timestamp with millisecond precision"
+          },
+          "exitCode": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hostPortBound": {
+            "type": "boolean",
+            "description": "True on Linux when the per-burrow userspace forwarder is bound at `127.0.0.1:hostPort`. False on macOS where the forward is implicit (Seatbelt doesn't isolate the netns) — sidecar binds host loopback directly."
+          },
+          "inboundPortForward": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InboundPortForward"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "burrowId",
+          "command",
+          "state",
+          "startedAt",
+          "exitCode",
+          "message",
+          "pid",
+          "hostPortBound",
+          "inboundPortForward"
+        ],
+        "additionalProperties": false
+      },
+      "SidecarLogs": {
+        "type": "object",
+        "properties": {
+          "stdout": {
+            "type": "string",
+            "description": "UTF-8 decoded stdout buffer (lossy, capped at 64 KiB by default)."
+          },
+          "stderr": {
+            "type": "string",
+            "description": "UTF-8 decoded stderr buffer (lossy, capped at 64 KiB by default)."
+          }
+        },
+        "required": [
+          "stdout",
+          "stderr"
+        ],
+        "additionalProperties": false
+      },
       "WorkspaceFile": {
         "type": "object",
         "properties": {
@@ -1079,6 +1251,10 @@
     {
       "name": "runs",
       "description": "Runs namespace (SPEC §15.2)."
+    },
+    {
+      "name": "sidecars",
+      "description": "Sidecars namespace (R-08, SPEC §8.7). Long-lived non-agent processes scoped to a burrow; warren's per-run preview environments are the load-bearing consumer."
     },
     {
       "name": "inbox",
@@ -1935,6 +2111,282 @@
           },
           "503": {
             "description": "Error envelope (`worker_draining — POST /admin/drain has set this worker's drain bit; retry against another worker or flip drain off to resume`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/burrows/{id}/sidecars": {
+      "get": {
+        "operationId": "listSidecars",
+        "summary": "List sidecars for one burrow (R-08, SPEC §8.7). Sidecars are long-lived non-agent processes scoped to the burrow — warren spawns one per preview environment. Storage is in-memory per `burrow serve` process; a worker restart drops them.",
+        "tags": [
+          "sidecars"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^bur_"
+            },
+            "required": true,
+            "description": "Burrow id, e.g. `bur_a3f9`."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of sidecars.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Sidecar"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error envelope (`not_found — unknown burrow or sidecars not enabled on this worker`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSidecar",
+        "summary": "Spawn a sidecar inside the burrow's sandbox (R-08, SPEC §8.7). The sidecar inherits the burrow's stored `SandboxProfile` (network policy, ro-binds, workspace bind) — no escalation. Optional `inboundPortForward` plumbs `127.0.0.1:hostPort` on the host into `127.0.0.1:sandboxPort` inside the sandbox's network namespace (Linux: per-connection `nsenter`+`nc` relay; macOS: implicit, returns `host_port_bound: false`). Per-burrow cap (default 4, configurable via `BURROW_SIDECAR_CAP`) bounds blast radius — over-cap returns 409 `sidecar_cap_exceeded`.",
+        "tags": [
+          "sidecars"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^bur_"
+            },
+            "required": true,
+            "description": "Burrow id, e.g. `bur_a3f9`."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSidecarBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The spawned sidecar.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sidecar"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error envelope (`validation_error — invalid command, env, or `inboundPortForward` shape; burrow not active`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error envelope (`not_found — unknown burrow or sidecars not enabled on this worker`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error envelope (`sidecar_cap_exceeded — per-burrow cap reached`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/burrows/{id}/sidecars/{sidecarId}": {
+      "get": {
+        "operationId": "getSidecar",
+        "summary": "Get a sidecar's current state (R-08, SPEC §8.7).",
+        "tags": [
+          "sidecars"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^bur_"
+            },
+            "required": true,
+            "description": "Burrow id, e.g. `bur_a3f9`."
+          },
+          {
+            "name": "sidecarId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^sc_"
+            },
+            "required": true,
+            "description": "Sidecar id, e.g. `sc_a4b0`."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sidecar.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sidecar"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error envelope (`not_found — unknown burrow / sidecar, or sidecars not enabled`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteSidecar",
+        "summary": "Tear down a sidecar (R-08, SPEC §8.7). Cancels the process and releases its inbound forward. Idempotent on already-terminal sidecars (returns 204 even if state is `exited`/`torn-down`/`failed`). The state transitions to `torn-down` so subsequent `GET` reflects the explicit teardown.",
+        "tags": [
+          "sidecars"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^bur_"
+            },
+            "required": true,
+            "description": "Burrow id, e.g. `bur_a3f9`."
+          },
+          {
+            "name": "sidecarId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^sc_"
+            },
+            "required": true,
+            "description": "Sidecar id, e.g. `sc_a4b0`."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Sidecar torn down."
+          },
+          "404": {
+            "description": "Error envelope (`not_found — unknown burrow / sidecar, or sidecars not enabled`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/burrows/{id}/sidecars/{sidecarId}/logs": {
+      "get": {
+        "operationId": "sidecarLogs",
+        "summary": "Read the sidecar's captured stdout/stderr. Logs are an in-memory ring buffer per stream (default 64 KiB; oldest bytes evict head-first). `?tail_bytes=N` returns the last N bytes per stream; omitting returns whatever is currently buffered.",
+        "tags": [
+          "sidecars"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^bur_"
+            },
+            "required": true,
+            "description": "Burrow id, e.g. `bur_a3f9`."
+          },
+          {
+            "name": "sidecarId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^sc_"
+            },
+            "required": true,
+            "description": "Sidecar id, e.g. `sc_a4b0`."
+          },
+          {
+            "name": "tail_bytes",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Return only the last N bytes of each stream."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sidecar log payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SidecarLogs"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error envelope (`not_found — unknown burrow / sidecar, or sidecars not enabled`).",
             "content": {
               "application/json": {
                 "schema": {

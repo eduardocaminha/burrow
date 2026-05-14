@@ -34,6 +34,7 @@ import {
 } from "../../runner/dispatcher.ts";
 import { resolveAuth } from "../../server/auth.ts";
 import { startServer } from "../../server/server.ts";
+import { SidecarRegistry } from "../../server/sidecars.ts";
 import type { Transport } from "../../server/types.ts";
 
 export interface ServeCommandOptions {
@@ -132,6 +133,12 @@ export async function runServeCommand(input: ServeCommandInput): Promise<ServeCo
 	const dispatcher: RunDispatcherHandle = startRunDispatcher(input.client, dispatcherOptions);
 	const recovered = dispatcher.start().recovered;
 
+	// Sidecar registry is server-scoped (R-08, SPEC §8.7): warren spawns
+	// long-lived preview processes through `POST /burrows/:id/sidecars`,
+	// and the per-burrow inbound port-forward + lifecycle invariants live
+	// here. In-memory only — a worker restart drops sidecars.
+	const sidecars = new SidecarRegistry({ client: input.client });
+
 	let handle: Awaited<ReturnType<typeof startServer>>;
 	try {
 		// Wire the dispatcher's drain bit through to the HTTP layer so
@@ -142,8 +149,10 @@ export async function runServeCommand(input: ServeCommandInput): Promise<ServeCo
 			auth,
 			logger,
 			admin: { drain: dispatcher.drain },
+			sidecars,
 		});
 	} catch (err) {
+		await sidecars.shutdownAll().catch(() => undefined);
 		await dispatcher.stop({ force: true });
 		throw err;
 	}
@@ -161,9 +170,12 @@ export async function runServeCommand(input: ServeCommandInput): Promise<ServeCo
 		await waitForAbort(input.signal);
 	} finally {
 		// HTTP first so no new runs can be enqueued while the dispatcher
-		// is draining; then dispatcher with `force` so in-flight handlers
-		// see the abort and tear their spawned subprocess down.
+		// is draining; then sidecars (release inbound forwards / kill
+		// long-lived processes before tearing down the dispatcher); then
+		// dispatcher with `force` so in-flight handlers see the abort and
+		// tear their spawned subprocess down.
 		await handle.stop();
+		await sidecars.shutdownAll().catch(() => undefined);
 		await dispatcher.stop({ force: true });
 	}
 

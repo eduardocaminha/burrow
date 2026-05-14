@@ -47,6 +47,7 @@ import type {
 import { NETWORK_POLICIES, type NetworkPolicy } from "../provider/types.ts";
 import type { AgentRuntime, InstallCheckResult } from "../runtime/runtime.ts";
 import { jsonResponse, ndjsonResponse } from "./response.ts";
+import type { SidecarCreateInput, SidecarRegistry } from "./sidecars.ts";
 import type { RouteContext, RouteHandler } from "./types.ts";
 import {
 	listWorkspaceFiles,
@@ -305,12 +306,19 @@ function getBurrow(client: Client): RouteHandler {
 	};
 }
 
-function destroyBurrow(client: Client): RouteHandler {
+function destroyBurrow(client: Client, deps: HandlerDeps): RouteHandler {
 	return async (ctx) => {
 		const id = requireParam(ctx, "id");
 		const opts: { archive?: boolean } = {};
 		const archive = parseBoolean(ctx.url.searchParams.get("archive"), "archive");
 		if (archive !== undefined) opts.archive = archive;
+		// Cascade: terminate every live sidecar + release every forward
+		// before the burrow row is marked destroyed (SPEC §8.7 cleanup
+		// invariant). Done first so callers never see a destroyed burrow
+		// whose sidecars are still bound to host ports.
+		if (deps.sidecars) {
+			await deps.sidecars.cascadeDeleteBurrow(id);
+		}
 		const result = await client.burrows.destroy(id, opts);
 		return jsonResponse(200, result);
 	};
@@ -807,16 +815,175 @@ function watchHandler(client: Client): RouteHandler {
 }
 
 /* ----------------------------------------------------------------------- */
+/* Sidecars (§8.7, R-08)                                                    */
+/* ----------------------------------------------------------------------- */
+
+function parseInboundPortForward(
+	raw: unknown,
+): { hostPort: number; sandboxPort: number } | undefined {
+	if (raw === undefined || raw === null) return undefined;
+	if (typeof raw !== "object" || Array.isArray(raw)) {
+		throw new ValidationError("field 'inboundPortForward' must be a JSON object");
+	}
+	const obj = raw as Record<string, unknown>;
+	const hostPort = obj.hostPort;
+	const sandboxPort = obj.sandboxPort;
+	if (
+		typeof hostPort !== "number" ||
+		!Number.isInteger(hostPort) ||
+		hostPort < 1 ||
+		hostPort > 65535
+	) {
+		throw new ValidationError(
+			"field 'inboundPortForward.hostPort' must be an integer in [1, 65535]",
+		);
+	}
+	if (
+		typeof sandboxPort !== "number" ||
+		!Number.isInteger(sandboxPort) ||
+		sandboxPort < 1 ||
+		sandboxPort > 65535
+	) {
+		throw new ValidationError(
+			"field 'inboundPortForward.sandboxPort' must be an integer in [1, 65535]",
+		);
+	}
+	return { hostPort, sandboxPort };
+}
+
+function parseEnvMap(raw: unknown): Record<string, string> | undefined {
+	if (raw === undefined || raw === null) return undefined;
+	if (typeof raw !== "object" || Array.isArray(raw)) {
+		throw new ValidationError("field 'env' must be a JSON object of string→string");
+	}
+	const out: Record<string, string> = {};
+	for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+		if (typeof v !== "string") {
+			throw new ValidationError(`field 'env.${k}' must be a string`);
+		}
+		out[k] = v;
+	}
+	return out;
+}
+
+function requireSidecars(deps: HandlerDeps): SidecarRegistry {
+	if (!deps.sidecars) {
+		throw new NotFoundError("sidecars are not enabled on this server", {
+			recoveryHint: "burrow serve registers a SidecarRegistry; library-mode embeds opt out",
+		});
+	}
+	return deps.sidecars;
+}
+
+function listSidecarsHandler(client: Client, deps: HandlerDeps): RouteHandler {
+	return (ctx) => {
+		const burrowId = requireParam(ctx, "id");
+		client.burrows.get(burrowId);
+		const sidecars = requireSidecars(deps);
+		return jsonResponse(200, sidecars.list(burrowId).map(serializeSidecar));
+	};
+}
+
+function createSidecarHandler(client: Client, deps: HandlerDeps): RouteHandler {
+	return async (ctx) => {
+		const burrowId = requireParam(ctx, "id");
+		client.burrows.get(burrowId);
+		const body = await readJsonBody(ctx);
+		const command = optionalStringArray(body, "command");
+		if (command === undefined || command.length === 0) {
+			throw new ValidationError("field 'command' is required and must be a non-empty array");
+		}
+		const input: SidecarCreateInput = { burrowId, command };
+		const env = parseEnvMap(body.env);
+		if (env !== undefined) input.env = env;
+		const cwd = optionalString(body, "cwd");
+		if (cwd !== undefined) input.cwd = cwd;
+		const inbound = parseInboundPortForward(body.inboundPortForward);
+		if (inbound !== undefined) input.inboundPortForward = inbound;
+		const readinessPath = optionalString(body, "readinessPath");
+		if (readinessPath !== undefined) input.readinessPath = readinessPath;
+		const sidecars = requireSidecars(deps);
+		const record = await sidecars.create(input);
+		return jsonResponse(201, serializeSidecar(record));
+	};
+}
+
+function getSidecarHandler(client: Client, deps: HandlerDeps): RouteHandler {
+	return (ctx) => {
+		const burrowId = requireParam(ctx, "id");
+		const sidecarId = requireParam(ctx, "sidecarId");
+		client.burrows.get(burrowId);
+		const sidecars = requireSidecars(deps);
+		return jsonResponse(200, serializeSidecar(sidecars.get(burrowId, sidecarId)));
+	};
+}
+
+function deleteSidecarHandler(client: Client, deps: HandlerDeps): RouteHandler {
+	return async (ctx) => {
+		const burrowId = requireParam(ctx, "id");
+		const sidecarId = requireParam(ctx, "sidecarId");
+		client.burrows.get(burrowId);
+		const sidecars = requireSidecars(deps);
+		await sidecars.delete(burrowId, sidecarId);
+		return new Response(null, { status: 204 });
+	};
+}
+
+function sidecarLogsHandler(client: Client, deps: HandlerDeps): RouteHandler {
+	return (ctx) => {
+		const burrowId = requireParam(ctx, "id");
+		const sidecarId = requireParam(ctx, "sidecarId");
+		client.burrows.get(burrowId);
+		const tailBytes = parseNonNegativeInt(ctx.url.searchParams.get("tail_bytes"), "tail_bytes");
+		const sidecars = requireSidecars(deps);
+		return jsonResponse(
+			200,
+			tailBytes !== undefined
+				? sidecars.logs(burrowId, sidecarId, tailBytes)
+				: sidecars.logs(burrowId, sidecarId),
+		);
+	};
+}
+
+function serializeSidecar(record: ReturnType<SidecarRegistry["get"]>): Record<string, unknown> {
+	return {
+		id: record.id,
+		burrowId: record.burrowId,
+		command: [...record.command],
+		state: record.state,
+		startedAt: record.startedAt.toISOString(),
+		exitCode: record.exitCode,
+		message: record.message,
+		pid: record.pid,
+		hostPortBound: record.hostPortBound,
+		inboundPortForward: record.inboundPortForward,
+	};
+}
+
+/* ----------------------------------------------------------------------- */
 /* Dispatch                                                                */
 /* ----------------------------------------------------------------------- */
+
+export interface HandlerDeps {
+	sidecars?: SidecarRegistry;
+}
 
 /**
  * Resolve a method+pattern pair to its bound handler. Every route in the
  * canonical table now has a real handler; `null` is reserved for unknown
  * method/pattern pairs (routes.ts falls back to the 501 stub for those, so
  * an out-of-table call still rejects cleanly).
+ *
+ * `deps.sidecars` is opt-in: when omitted, the sidecar routes return 404
+ * with a hint that the surface is not enabled (matches the library-mode
+ * embed posture — only `burrow serve` instantiates a `SidecarRegistry`).
  */
-export function handlerFor(client: Client, method: string, pattern: string): RouteHandler | null {
+export function handlerFor(
+	client: Client,
+	method: string,
+	pattern: string,
+	deps: HandlerDeps = {},
+): RouteHandler | null {
 	const key = `${method} ${pattern}`;
 	switch (key) {
 		case "GET /burrows":
@@ -826,7 +993,7 @@ export function handlerFor(client: Client, method: string, pattern: string): Rou
 		case "GET /burrows/:id":
 			return getBurrow(client);
 		case "DELETE /burrows/:id":
-			return destroyBurrow(client);
+			return destroyBurrow(client, deps);
 		case "POST /burrows/:id/stop":
 			return stopBurrow(client);
 		case "POST /burrows/:id/resume":
@@ -845,6 +1012,16 @@ export function handlerFor(client: Client, method: string, pattern: string): Rou
 			return deleteRun(client);
 		case "POST /runs/:id/cancel":
 			return cancelRun(client);
+		case "GET /burrows/:id/sidecars":
+			return listSidecarsHandler(client, deps);
+		case "POST /burrows/:id/sidecars":
+			return createSidecarHandler(client, deps);
+		case "GET /burrows/:id/sidecars/:sidecarId":
+			return getSidecarHandler(client, deps);
+		case "DELETE /burrows/:id/sidecars/:sidecarId":
+			return deleteSidecarHandler(client, deps);
+		case "GET /burrows/:id/sidecars/:sidecarId/logs":
+			return sidecarLogsHandler(client, deps);
 		case "GET /burrows/:id/inbox":
 			return listInbox(client);
 		case "POST /burrows/:id/inbox":

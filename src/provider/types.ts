@@ -64,6 +64,24 @@ export interface SandboxProfile {
 	 * objects into the shared object database when committing.
 	 */
 	workspaceGitdir?: string;
+	/**
+	 * Per-burrow inbound loopback port-forwards (R-08, SPEC §8.7). For each
+	 * pair, traffic arriving at `127.0.0.1:hostPort` on the host is piped
+	 * into `127.0.0.1:sandboxPort` inside the sandbox's network namespace.
+	 *
+	 * Caller (e.g. warren) allocates `hostPort`; burrow plumbs the forward.
+	 * Bound to host loopback only — never `0.0.0.0`. The forwarder is a
+	 * sibling process to bwrap (not inside the netns) and `nsenter`s into
+	 * `/proc/<sandbox-pid>/ns/net` for each accepted connection. On macOS
+	 * the forward is implicit (sandbox-exec doesn't isolate the netns) so
+	 * the field is documentational on that platform — sidecar processes
+	 * bind directly on host loopback at `sandboxPort` and the host-side
+	 * `hostPort` is satisfied by `sandboxPort === hostPort`.
+	 */
+	inboundPortForwards?: ReadonlyArray<{
+		readonly hostPort: number;
+		readonly sandboxPort: number;
+	}>;
 }
 
 export interface SpawnCommand {

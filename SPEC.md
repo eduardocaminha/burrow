@@ -396,6 +396,10 @@ export interface SandboxProfile {
   envPassthrough: string[];              // env var names to forward
   setEnv: Record<string, string>;        // overrides
   toolchainPaths: string[];              // resolved by toolchain layer
+  inboundPortForwards?: Array<{          // per-burrow loopback forwards (R-08)
+    hostPort: number;
+    sandboxPort: number;
+  }>;
   timeoutMs?: number;
   memoryLimitMb?: number;
   cpuLimit?: number;
@@ -404,12 +408,26 @@ export interface SandboxProfile {
 
 The provider's `exec(handle, command)` builds the profile, renders the platform-specific invocation, and `Bun.spawn`s it. Streams flow back as `ReadableStream<Uint8Array>` for stdout/stderr.
 
+`inboundPortForwards` is the declarative shape for `R-08` (warren §11.L
+preview environments): the caller (warren) allocates `hostPort` from its
+own SQLite-backed port allocator and burrow plumbs traffic from
+`127.0.0.1:hostPort` on the host into `127.0.0.1:sandboxPort` inside the
+sandbox's network namespace. Bound to host loopback only — never
+`0.0.0.0`. Same per-burrow declarative shape as `readOnlyMounts` and the
+restricted-network proxy address: warren orchestrates allocation,
+eviction, and TTLs; burrow enforces the per-burrow forward and a small
+sidecar cap. Implementation phasing tracked under coordination seed
+`burrow-8647` (consumed by warren step `warren-83dc`).
+
 ### 8.4 What the sandbox can do
 
 - Run language toolchains (declared in `burrow.toml`, resolved from host install paths and read-only mounted into the sandbox).
 - Make HTTP calls only to allowed domains (when `network=restricted`).
 - Read/write inside the workspace.
 - Use SSH agent (passed through) for git push.
+- Accept inbound TCP on declared `inboundPortForwards` ports — sidecar
+  processes (§8.7) inside the sandbox can bind on `127.0.0.1:sandboxPort`
+  and receive traffic that arrived at `127.0.0.1:hostPort` on the host.
 
 ### 8.5 What it cannot do
 
@@ -417,6 +435,9 @@ The provider's `exec(handle, command)` builds the profile, renders the platform-
 - Access the user's home directory, SSH keys (only the agent socket), browser data, or any other host file.
 - Run Docker.
 - Reach the network when policy is `none`, or unallowed domains when `restricted`.
+- Accept inbound traffic on any port that isn't in `inboundPortForwards`,
+  or bind to `0.0.0.0` and become reachable from outside the host —
+  forwarders bind host loopback only.
 
 ### 8.6 Why native, not `srt`
 
@@ -425,6 +446,107 @@ The provider's `exec(handle, command)` builds the profile, renders the platform-
 - The bwrap/sandbox-exec primitives are stable OS interfaces. The wrapping code is roughly 500-800 LOC and changes rarely once correct.
 
 The first reasonable port of `srt`'s default profile is the starting baseline, validated against Claude Code's expectations.
+
+### 8.7 Inbound networking + sidecars (R-08, coordination seed `burrow-8647`)
+
+Two capabilities that ship together to support warren's per-run preview
+environments (warren `SPEC.md` §11.L, plan `pl-2c59`, root seed
+`warren-1bcb`). Coordination seed `burrow-8647`; warren-side consumer is
+`warren-83dc`.
+
+**Inbound port-forward shape.** `SandboxProfile.inboundPortForwards`
+(§8.3) declares per-burrow `{hostPort, sandboxPort}` pairs. Same
+architectural seam as the `.gitconfig.burrow` ro-bind and the
+restricted-network proxy address: caller declares, burrow enforces. The
+forward lifetime is tied to the burrow lifecycle (released on burrow
+delete) and is also tearable on demand so warren's eviction worker can
+release the host port when a preview goes idle without destroying the
+burrow.
+
+- **Linux (bwrap).** Per-burrow userspace forwarder process listens on
+  `127.0.0.1:hostPort` on the host and forwards into the burrow's
+  network namespace. Same userspace-proxy posture §8.1 already uses for
+  outbound DNS in `restricted` mode; reuses Bun's `Bun.listen` + a
+  TCP-to-TCP pipe rather than pulling in `socat` as a runtime
+  dependency. The forwarder is a sibling process to bwrap (not inside
+  the netns); it `nsenter`s into the burrow's `/proc/<pid>/ns/net` to
+  reach the sandbox-side port.
+- **macOS (sandbox-exec).** Seatbelt doesn't isolate the network
+  namespace the same way; the forward is implicit (the sidecar process
+  binds to host loopback directly). The platform returns
+  `host_port_bound: true` from sidecar create without spawning a
+  forwarder — warren acceptance scenario 20 documents the macOS path as
+  a skip per warren `mx-1d31f0`.
+
+**Sidecar exec endpoint.** Parallel to `POST /burrows/:id/runs` but for
+non-agent long-lived processes. Warren spawns `preview.command` (e.g.
+`bun run dev`) as a long-lived sidecar in the same workspace the agent
+used, *after* the agent run reaches terminal success. Burrow does not
+gate sidecar creation on the agent run being terminal — warren controls
+the ordering (reap-time sub-step). Burrow enforces a per-burrow cap
+(default 4) so a misconfigured caller can't spawn unbounded sidecars.
+
+Routes:
+
+```
+POST   /burrows/:id/sidecars
+       Body: { command: string[], env?: Record<string,string>, cwd?: string,
+               inboundPortForward?: { hostPort, sandboxPort },
+               readinessPath?: string }
+       → { sidecar_id, host_port_bound: boolean, pid? }
+       Errors: ValidationError, NotFoundError, sidecar_cap_exceeded (409)
+
+GET    /burrows/:id/sidecars/:sid
+       → { state: 'starting'|'live'|'exited'|'failed',
+           started_at, exit_code?, message? }
+
+GET    /burrows/:id/sidecars/:sid/logs?tail_bytes=N
+       → { stdout: string, stderr: string }
+
+DELETE /burrows/:id/sidecars/:sid
+       → 204; idempotent; releases the forward; emits `sidecar_torn_down`
+```
+
+`HttpClient.sidecars.*` mirrors the namespace surface; error rehydration
+matches the existing `runs` / `files` namespaces (`NotFoundError`,
+`ValidationError` via `src/server/errors.ts` envelope).
+
+**Process model.** A sidecar inherits the same sandbox profile as the
+agent run — network policy, ro-binds, workspace bind. It runs alongside
+any active or finished agent run in the same workspace ("same sandbox,
+not a fork" per warren §11.L); the agent's side effects on the
+workspace are accepted as the cost of realness. Sidecars are not
+agent-runs and don't emit `run_event`s; lifecycle transitions emit
+`sidecar_*` events on the burrow's event stream.
+
+**Cap of 4 sidecars per burrow.** Bounds blast radius even if warren
+misbehaves. The `inboundPortForward` clause is per-sidecar (not
+per-burrow at the `up` time) so a single burrow can host preview +
+build-watcher + debug-shell simultaneously without warren needing to
+multiplex.
+
+**Lifecycle.**
+
+- Process exit → state `exited` with exit code captured; forward
+  released.
+- Explicit `DELETE` → state `torn-down`; forward released; idempotent
+  on already-terminal sidecars (returns 204).
+- Burrow `DELETE` → all sidecars terminated, forwards released, before
+  burrow row is marked destroyed. Same cleanup invariant as in-flight
+  runs.
+
+### 8.8 What sidecars *cannot* do
+
+- Run with a wider sandbox profile than the parent burrow's — sidecars
+  inherit the same `SandboxProfile`, no escalation.
+- Bind on `0.0.0.0` and be reachable from outside the host. The
+  forwarder explicitly binds host loopback; warren's reverse proxy is
+  the only path from external clients into the sidecar.
+- Survive burrow deletion. The cleanup invariant runs on burrow tear-
+  down, not on warren teardown alone.
+- Exceed the per-burrow cap (default 4; configurable via
+  `BURROW_SIDECAR_CAP`). Over-cap creates fail with `409
+  sidecar_cap_exceeded`.
 
 ---
 

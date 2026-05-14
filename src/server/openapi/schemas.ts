@@ -417,6 +417,93 @@ export const DrainStateSchema = component(
 );
 
 /* ----------------------------------------------------------------------- */
+/* Sidecars (R-08, SPEC §8.7)                                               */
+/* ----------------------------------------------------------------------- */
+
+const InboundPortForwardSchema = component(
+	"InboundPortForward",
+	z.object({
+		hostPort: z
+			.number()
+			.int()
+			.min(1)
+			.max(65535)
+			.describe(
+				"Host-side loopback port the forwarder binds at `127.0.0.1:hostPort`. Caller (e.g. warren) allocates; burrow plumbs.",
+			),
+		sandboxPort: z
+			.number()
+			.int()
+			.min(1)
+			.max(65535)
+			.describe("Port the sidecar process binds at `127.0.0.1:sandboxPort` inside the sandbox."),
+	}),
+);
+
+export const SidecarSchema = component(
+	"Sidecar",
+	z.object({
+		id: z.string(),
+		burrowId: z.string(),
+		command: z.array(z.string()),
+		state: z.enum(["starting", "live", "exited", "failed", "torn-down"]),
+		startedAt: isoTimestamp,
+		exitCode: z.number().int().nullable(),
+		message: z.string().nullable(),
+		pid: z.number().int().nullable(),
+		hostPortBound: z
+			.boolean()
+			.describe(
+				"True on Linux when the per-burrow userspace forwarder is bound at `127.0.0.1:hostPort`. False on macOS where the forward is implicit (Seatbelt doesn't isolate the netns) — sidecar binds host loopback directly.",
+			),
+		inboundPortForward: InboundPortForwardSchema.nullable(),
+	}),
+);
+
+export const CreateSidecarBodySchema = component(
+	"CreateSidecarBody",
+	z.object({
+		command: z
+			.array(z.string().min(1))
+			.min(1)
+			.describe(
+				"Argv to launch inside the sandbox. The sidecar inherits the burrow's `SandboxProfile` (network policy, ro-binds, workspace bind).",
+			),
+		env: z
+			.record(z.string(), z.string())
+			.optional()
+			.describe("Extra env to merge on top of the profile's resolved env."),
+		cwd: z
+			.string()
+			.optional()
+			.describe(
+				"Working directory inside the sandbox. Relative to `/workspace`; absolute paths must already be visible to the sandbox profile. Defaults to `/workspace`.",
+			),
+		inboundPortForward: InboundPortForwardSchema.optional().describe(
+			"Optional inbound TCP forward. When set, burrow binds `127.0.0.1:hostPort` on the host and pipes accepted connections into `127.0.0.1:sandboxPort` inside the sandbox's network namespace. Linux uses a Bun-native `nsenter`+`nc` per-connection relay; macOS is a no-op (the forward is implicit and `host_port_bound` returns false).",
+		),
+		readinessPath: z
+			.string()
+			.optional()
+			.describe(
+				"Advisory HTTP path the caller may poll once the sidecar is `live`. Burrow does not gate on readiness — the caller (e.g. warren's preview proxy) is responsible for polling.",
+			),
+	}),
+);
+
+export const SidecarLogsSchema = component(
+	"SidecarLogs",
+	z.object({
+		stdout: z
+			.string()
+			.describe("UTF-8 decoded stdout buffer (lossy, capped at 64 KiB by default)."),
+		stderr: z
+			.string()
+			.describe("UTF-8 decoded stderr buffer (lossy, capped at 64 KiB by default)."),
+	}),
+);
+
+/* ----------------------------------------------------------------------- */
 /* Query parameter primitives (used by spec.ts for parameter authoring)     */
 /* ----------------------------------------------------------------------- */
 

@@ -406,6 +406,83 @@ seed in the warren repo (2026-05-13).
 
 ---
 
+## R-08 — Inbound port-forwards + sidecar exec endpoint
+Status: [in-progress] (contract locked; runtime work pending)
+Depends on: R-07 (HTTP API surface), `[workers]`-pool placement
+(`burrow-62ce`)
+Unlocks: warren `R-19` per-run preview environments (warren plan
+`pl-2c59`, root seed `warren-1bcb`)
+
+**Problem.** Burrow's bwrap profile is outbound-only today (`SPEC.md`
+§8.1, `network: 'none' | 'restricted' | 'open'`). The run API is shaped
+around single-shot agent invocations. Warren's R-19 needs two
+capabilities burrow doesn't expose: (1) inbound networking — bind a
+host-side loopback port and surface its traffic inside the sandbox's
+network namespace, and (2) sidecar exec — spawn `preview.command` as a
+long-lived process inside the same workspace the agent used, with a
+distinct lifecycle from `runs` (no agent envelope, no `stop_reason`,
+long-lived, terminates on TTL / teardown / eviction).
+
+**Sketch.** Contract is locked in SPEC §8.7 (2026-05-14) and tracked by
+coordination seed `burrow-8647` (consumed by warren `warren-83dc`).
+
+- `SandboxProfile.inboundPortForwards?: Array<{hostPort, sandboxPort}>`
+  declares per-burrow loopback forwards. Caller (warren) allocates the
+  host port; burrow plumbs traffic.
+- Linux: per-burrow userspace forwarder via `Bun.listen` +
+  `nsenter --net=/proc/<pid>/ns/net`. Same posture as the
+  restricted-network outbound proxy. Host loopback only — never
+  `0.0.0.0`.
+- macOS: sandbox-exec doesn't isolate the network namespace; the
+  forward is implicit. Warren acceptance scenario 20 documents the
+  macOS path as a skip (mirrors warren `mx-1d31f0`).
+- `POST /burrows/:id/sidecars` (+ `GET / DELETE / logs`) ships as a new
+  namespace on the HTTP API. `HttpClient.sidecars.*` mirrors the
+  namespace surface; error rehydration matches `runs` / `files`.
+- Per-burrow sidecar cap (default 4, `BURROW_SIDECAR_CAP`) enforced
+  with `409 sidecar_cap_exceeded`. Bounds blast radius even if warren
+  misbehaves.
+- Lifecycle: process exit → `exited`; explicit `DELETE` → `torn-down`
+  (idempotent); burrow `DELETE` → all sidecars terminated and forwards
+  released before the burrow row is marked destroyed.
+
+**Implementation phasing.** Decomposed under coordination seed
+`burrow-8647`. Roughly four shipable sub-seeds:
+
+1. `SandboxProfile.inboundPortForwards` type + bwrap profile-builder
+   accepts the field; sandbox-exec path returns the implicit-forward
+   shape. Tests on the type-only surface land first so warren-side
+   mirror work can start.
+2. Linux userspace forwarder (`Bun.listen` + nsenter pipe; reuses the
+   restricted-proxy posture from `mx-d6a44f`). End-to-end test: a
+   sandbox-side process binding `127.0.0.1:3000` is reachable at
+   `127.0.0.1:<hostPort>` on the host.
+3. `POST /burrows/:id/sidecars` + `GET` / `DELETE` / `logs` server
+   routes + `HttpClient.sidecars.*` surface + OpenAPI golden update +
+   per-burrow cap enforcement.
+4. Sidecar lifecycle wiring: process-exit observer, cascade on burrow
+   delete, `sidecar_*` event emission on the burrow event stream.
+
+**Open questions (mostly resolved in SPEC §8.7).**
+
+- ~~Forward implementation: `socat` vs Bun-native?~~ → Bun-native
+  `Bun.listen` pipe to avoid adding `socat` to the image; reuses the
+  restricted-proxy code shape (`mx-d6a44f`).
+- ~~Sidecar vs run unification?~~ → Distinct namespace. Runs and
+  sidecars have different lifecycles, different event shapes, and
+  different terminal conditions; collapsing them into a single
+  `runs` table would require either a `kind` discriminator with two
+  half-applicable column sets or an envelope wrapper that's worse than
+  the route split.
+- Forward implementation on cross-host placement (`burrow-62ce`
+  `[workers]`)? → The forward is local-to-the-worker; warren returns
+  `501` on cross-host preview proxying (warren §11.L R-12 deferral).
+  Burrow doesn't need cross-host plumbing for R-08.
+- Sidecar cap default 4 vs 8? → Default 4 in V1; bump only when a real
+  workload (preview + build-watcher + debug-shell + ...) demands it.
+
+---
+
 ## Decisions already made
 
 Choices locked in during prior design discussions. Captured here so they aren't
@@ -521,16 +598,19 @@ A first cut at order of attack — not committed:
 1. ~~**R-01** (deploy posture)~~ — shipped, see [DEPLOY.md](DEPLOY.md).
 2. ~~**R-07** (workspace-seed HTTP API)~~ — shipped burrow-side (plan
    `pl-2467`); warren-side adoption tracked downstream in warren's tracker.
-3. **R-04** (toolchain auto-install) — valuable for solo and team
+3. **R-08** (inbound port-forwards + sidecars) — contract locked
+   (SPEC §8.7, coordination seed `burrow-8647`); runtime work is on
+   the critical path for warren `R-19` (warren plan `pl-2c59`).
+4. **R-04** (toolchain auto-install) — valuable for solo and team
    onboarding; orthogonal to everything else.
-4. **R-06** (overstory/mycelium integration) — burrow's HTTP API
+5. **R-06** (overstory/mycelium integration) — burrow's HTTP API
    (shipped in 0.3.0) already makes burrow a substrate worth migrating to;
    warren is proving the pattern. No longer waits on R-02.
-5. **R-05** (ship target plugins) — incremental once `burrow ship`'s
+6. **R-05** (ship target plugins) — incremental once `burrow ship`'s
    interface is exercised by a fourth, user-supplied target.
-6. **R-03** (snapshot / restore) — defer until V1 is stable enough that
+7. **R-03** (snapshot / restore) — defer until V1 is stable enough that
    "rewind a burrow" is a meaningful operation rather than rare polish.
-7. **R-02** (FlyProvider + SshProvider) — *superseded by `burrow-62ce`*.
+8. **R-02** (FlyProvider + SshProvider) — *superseded by `burrow-62ce`*.
    The multi-host concurrency goal ships via static `[workers]` config +
    a warren-side `BurrowClientPool` over the existing HTTP API. Revisit
    only if a workflow surfaces (laptop `burrow up --remote my-vps`,

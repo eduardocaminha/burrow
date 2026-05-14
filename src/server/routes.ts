@@ -21,6 +21,7 @@ import { notImplemented } from "./errors.ts";
 import { handlerFor } from "./handlers.ts";
 import { openApiHtmlHandler, openApiJsonHandler } from "./openapi/handlers.ts";
 import { jsonResponse } from "./response.ts";
+import type { SidecarRegistry } from "./sidecars.ts";
 import type { AdminControls, Route, RouteHandler } from "./types.ts";
 
 /**
@@ -29,12 +30,15 @@ import type { AdminControls, Route, RouteHandler } from "./types.ts";
  * `Client` is provided, every canonical route now has a bound handler and
  * the 501 stub only fires for unknown method/pattern pairs.
  */
-export function buildRoutes(client: Client | null): Route[] {
+export function buildRoutes(
+	client: Client | null,
+	deps: { sidecars?: SidecarRegistry } = {},
+): Route[] {
 	return ROUTE_TABLE.map((entry) => {
 		const handler =
 			client === null
 				? stubHandler(entry.method, entry.pattern)
-				: (handlerFor(client, entry.method, entry.pattern) ??
+				: (handlerFor(client, entry.method, entry.pattern, deps) ??
 					stubHandler(entry.method, entry.pattern));
 		return {
 			method: entry.method,
@@ -82,9 +86,9 @@ const metaRoutes: readonly Route[] = [
  */
 export function buildRoutesWithHealth(
 	client: Client | null,
-	opts: { admin?: AdminControls } = {},
+	opts: { admin?: AdminControls; sidecars?: SidecarRegistry } = {},
 ): Route[] {
-	const mirrored = buildRoutes(client);
+	const mirrored = buildRoutes(client, opts.sidecars ? { sidecars: opts.sidecars } : {});
 	const gated = opts.admin ? gateMirroredRoutes(mirrored, opts.admin) : mirrored;
 	const admin = opts.admin ? buildAdminRoutes(opts.admin) : [];
 	return [...metaRoutes, ...admin, ...gated];
@@ -129,6 +133,12 @@ const ROUTE_TABLE: readonly RouteEntry[] = [
 	{ method: "DELETE", pattern: "/runs/:id" },
 	{ method: "POST", pattern: "/runs/:id/cancel" },
 	{ method: "GET", pattern: "/runs/:id/stream" },
+
+	{ method: "GET", pattern: "/burrows/:id/sidecars" },
+	{ method: "POST", pattern: "/burrows/:id/sidecars" },
+	{ method: "GET", pattern: "/burrows/:id/sidecars/:sidecarId" },
+	{ method: "DELETE", pattern: "/burrows/:id/sidecars/:sidecarId" },
+	{ method: "GET", pattern: "/burrows/:id/sidecars/:sidecarId/logs" },
 
 	{ method: "GET", pattern: "/burrows/:id/inbox" },
 	{ method: "POST", pattern: "/burrows/:id/inbox" },

@@ -17,6 +17,7 @@ import {
 	WorkerDrainingError,
 	WorkspaceMaterializationError,
 } from "../core/errors.ts";
+import { SidecarCapExceededError } from "./sidecars.ts";
 import type { ErrorEnvelope } from "./types.ts";
 
 interface RenderedError {
@@ -88,6 +89,7 @@ function statusFor(err: BurrowError): number {
 	if (err instanceof SandboxError) return 502;
 	if (err instanceof WorkspaceMaterializationError) return 500;
 	if (err instanceof ToolchainMismatch) return 409;
+	if (err instanceof SidecarCapExceededError) return 409;
 	if (err instanceof SecretResolutionError) return 502;
 	if (err instanceof WorkerDrainingError) return 503;
 	return 500;

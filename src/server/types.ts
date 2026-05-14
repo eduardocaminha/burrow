@@ -14,6 +14,7 @@
 import type { Logger } from "../logging/logger.ts";
 import type { DrainController } from "../runner/dispatcher.ts";
 import type { AuthProvider } from "./auth.ts";
+import type { SidecarRegistry } from "./sidecars.ts";
 
 /**
  * Error envelope rendered for every non-2xx response. Mirrors the shape of
@@ -95,6 +96,13 @@ export interface ServeOptions {
 	 * skip the dispatcher leave this unset and the admin surface stays off.
 	 */
 	admin?: AdminControls;
+	/**
+	 * Sidecar registry (R-08, SPEC §8.7). When provided, mounts the
+	 * `/burrows/:id/sidecars` namespace; otherwise those routes return 404
+	 * with the `sidecars are not enabled` hint. `burrow serve` instantiates
+	 * one; library-mode embeds that don't run preview sidecars leave it unset.
+	 */
+	sidecars?: SidecarRegistry;
 }
 
 export interface AdminControls {

@@ -21,6 +21,7 @@ import {
 	CancelRunBodySchema,
 	CreateBurrowBodySchema,
 	CreateRunBodySchema,
+	CreateSidecarBodySchema,
 	componentRegistry,
 	DashboardSnapshotSchema,
 	DestroyBurrowResultSchema,
@@ -34,6 +35,8 @@ import {
 	QueryEnums,
 	RunSchema,
 	SendInboxBodySchema,
+	SidecarLogsSchema,
+	SidecarSchema,
 	WorkspaceFileEntrySchema,
 	WorkspaceFileSchema,
 	WriteFilesBodySchema,
@@ -106,6 +109,14 @@ const agentIdParam: ParameterDef = {
 	required: true,
 	description: "Agent runtime id (e.g. `claude-code`, `sapling`).",
 	schema: { type: "string" },
+};
+
+const sidecarIdParam: ParameterDef = {
+	name: "sidecarId",
+	in: "path",
+	required: true,
+	description: "Sidecar id, e.g. `sc_a4b0`.",
+	schema: { type: "string", pattern: "^sc_" },
 };
 
 const limitParam: ParameterDef = {
@@ -528,6 +539,111 @@ const OPERATIONS: readonly PathOperation[] = [
 	},
 	{
 		method: "get",
+		pattern: "/burrows/{id}/sidecars",
+		op: {
+			operationId: "listSidecars",
+			summary:
+				"List sidecars for one burrow (R-08, SPEC §8.7). Sidecars are long-lived non-agent processes scoped to the burrow — warren spawns one per preview environment. Storage is in-memory per `burrow serve` process; a worker restart drops them.",
+			tags: ["sidecars"],
+			parameters: [burrowIdParam],
+			responses: {
+				"200": {
+					description: "Array of sidecars.",
+					contentType: "application/json",
+					itemSchemaName: "Sidecar",
+					isArray: true,
+				},
+				"404": errorResponse("not_found — unknown burrow or sidecars not enabled on this worker"),
+			},
+		},
+	},
+	{
+		method: "post",
+		pattern: "/burrows/{id}/sidecars",
+		op: {
+			operationId: "createSidecar",
+			summary:
+				"Spawn a sidecar inside the burrow's sandbox (R-08, SPEC §8.7). The sidecar inherits the burrow's stored `SandboxProfile` (network policy, ro-binds, workspace bind) — no escalation. Optional `inboundPortForward` plumbs `127.0.0.1:hostPort` on the host into `127.0.0.1:sandboxPort` inside the sandbox's network namespace (Linux: per-connection `nsenter`+`nc` relay; macOS: implicit, returns `host_port_bound: false`). Per-burrow cap (default 4, configurable via `BURROW_SIDECAR_CAP`) bounds blast radius — over-cap returns 409 `sidecar_cap_exceeded`.",
+			tags: ["sidecars"],
+			parameters: [burrowIdParam],
+			requestBody: { schemaName: "CreateSidecarBody" },
+			responses: {
+				"201": {
+					description: "The spawned sidecar.",
+					contentType: "application/json",
+					schemaName: "Sidecar",
+				},
+				"400": errorResponse(
+					"validation_error — invalid command, env, or `inboundPortForward` shape; burrow not active",
+				),
+				"404": errorResponse("not_found — unknown burrow or sidecars not enabled on this worker"),
+				"409": errorResponse("sidecar_cap_exceeded — per-burrow cap reached"),
+			},
+		},
+	},
+	{
+		method: "get",
+		pattern: "/burrows/{id}/sidecars/{sidecarId}",
+		op: {
+			operationId: "getSidecar",
+			summary: "Get a sidecar's current state (R-08, SPEC §8.7).",
+			tags: ["sidecars"],
+			parameters: [burrowIdParam, sidecarIdParam],
+			responses: {
+				"200": {
+					description: "The sidecar.",
+					contentType: "application/json",
+					schemaName: "Sidecar",
+				},
+				"404": errorResponse("not_found — unknown burrow / sidecar, or sidecars not enabled"),
+			},
+		},
+	},
+	{
+		method: "delete",
+		pattern: "/burrows/{id}/sidecars/{sidecarId}",
+		op: {
+			operationId: "deleteSidecar",
+			summary:
+				"Tear down a sidecar (R-08, SPEC §8.7). Cancels the process and releases its inbound forward. Idempotent on already-terminal sidecars (returns 204 even if state is `exited`/`torn-down`/`failed`). The state transitions to `torn-down` so subsequent `GET` reflects the explicit teardown.",
+			tags: ["sidecars"],
+			parameters: [burrowIdParam, sidecarIdParam],
+			responses: {
+				"204": { description: "Sidecar torn down." },
+				"404": errorResponse("not_found — unknown burrow / sidecar, or sidecars not enabled"),
+			},
+		},
+	},
+	{
+		method: "get",
+		pattern: "/burrows/{id}/sidecars/{sidecarId}/logs",
+		op: {
+			operationId: "sidecarLogs",
+			summary:
+				"Read the sidecar's captured stdout/stderr. Logs are an in-memory ring buffer per stream (default 64 KiB; oldest bytes evict head-first). `?tail_bytes=N` returns the last N bytes per stream; omitting returns whatever is currently buffered.",
+			tags: ["sidecars"],
+			parameters: [
+				burrowIdParam,
+				sidecarIdParam,
+				{
+					name: "tail_bytes",
+					in: "query",
+					description: "Return only the last N bytes of each stream.",
+					schema: { type: "integer", minimum: 0 },
+				},
+			],
+			responses: {
+				"200": {
+					description: "Sidecar log payload.",
+					contentType: "application/json",
+					schemaName: "SidecarLogs",
+				},
+				"404": errorResponse("not_found — unknown burrow / sidecar, or sidecars not enabled"),
+			},
+		},
+	},
+	{
+		method: "get",
 		pattern: "/burrows/{id}/inbox",
 		op: {
 			operationId: "listInbox",
@@ -760,6 +876,11 @@ export function buildOpenApiDocument(opts: { version?: string } = {}): OpenApiDo
 			{ name: "meta", description: "Health and self-description." },
 			{ name: "burrows", description: "Burrows namespace (SPEC §15.1)." },
 			{ name: "runs", description: "Runs namespace (SPEC §15.2)." },
+			{
+				name: "sidecars",
+				description:
+					"Sidecars namespace (R-08, SPEC §8.7). Long-lived non-agent processes scoped to a burrow; warren's per-run preview environments are the load-bearing consumer.",
+			},
 			{ name: "inbox", description: "Inbox namespace (SPEC §15.3)." },
 			{ name: "events", description: "Events namespace (SPEC §15.4)." },
 			{ name: "agents", description: "Agents namespace (SPEC §15.5)." },
@@ -818,6 +939,9 @@ function registrySources(): readonly z.ZodType[] {
 		ListFilesResponseSchema,
 		DrainBodySchema,
 		DrainStateSchema,
+		SidecarSchema,
+		CreateSidecarBodySchema,
+		SidecarLogsSchema,
 	];
 }
 

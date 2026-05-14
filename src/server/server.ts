@@ -55,8 +55,13 @@ const IDLE_TIMEOUT_DISABLED = 0;
  */
 export function startServer(client: Client | null, opts: ServeOptions = {}): ServeHandle {
 	const logger = opts.logger ?? createLogger();
-	const routes: readonly Route[] =
-		opts.routes ?? buildRoutesWithHealth(client, opts.admin ? { admin: opts.admin } : {});
+	const routesOpts: {
+		admin?: import("./types.ts").AdminControls;
+		sidecars?: import("./sidecars.ts").SidecarRegistry;
+	} = {};
+	if (opts.admin) routesOpts.admin = opts.admin;
+	if (opts.sidecars) routesOpts.sidecars = opts.sidecars;
+	const routes: readonly Route[] = opts.routes ?? buildRoutesWithHealth(client, routesOpts);
 	const auth = opts.auth ?? NO_AUTH;
 	const transport = opts.transport ?? DEFAULT_TRANSPORT;
 

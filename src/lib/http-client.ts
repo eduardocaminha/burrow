@@ -196,6 +196,48 @@ export interface HttpAgentDetail extends HttpAgentSummary {
 	install: InstallCheckResult;
 }
 
+/* ----------------------------------------------------------------------- */
+/* Sidecars (R-08, SPEC §8.7)                                                */
+/* ----------------------------------------------------------------------- */
+
+export type HttpSidecarState = "starting" | "live" | "exited" | "failed" | "torn-down";
+
+export interface HttpInboundPortForward {
+	hostPort: number;
+	sandboxPort: number;
+}
+
+export interface HttpSidecarCreateInput {
+	burrowId: string;
+	command: readonly string[];
+	env?: Record<string, string>;
+	cwd?: string;
+	inboundPortForward?: HttpInboundPortForward;
+	readinessPath?: string;
+}
+
+export interface HttpSidecar {
+	id: string;
+	burrowId: string;
+	command: string[];
+	state: HttpSidecarState;
+	startedAt: Date;
+	exitCode: number | null;
+	message: string | null;
+	pid: number | null;
+	hostPortBound: boolean;
+	inboundPortForward: HttpInboundPortForward | null;
+}
+
+export interface HttpSidecarLogs {
+	stdout: string;
+	stderr: string;
+}
+
+export interface HttpSidecarLogsOptions {
+	tailBytes?: number;
+}
+
 interface RequestOptions {
 	method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 	path: string;
@@ -660,6 +702,91 @@ export class HttpAgentsClient {
 }
 
 /**
+ * Sidecars namespace (R-08, SPEC §8.7). HTTP-only — in-process `Client`
+ * doesn't surface sidecars because the registry is server-scoped (in-memory,
+ * shared across HTTP callers). Mirrors `POST /burrows/:id/sidecars`,
+ * `GET /burrows/:id/sidecars/:sidecarId`, the recursive list, `logs`, and
+ * `DELETE`. Errors rehydrate into `NotFoundError` / `ValidationError` /
+ * `HttpClientError` (for `sidecar_cap_exceeded`) just like the existing
+ * `runs` / `files` namespaces.
+ */
+export class HttpSidecarsClient {
+	constructor(private readonly transport: HttpTransportClient) {}
+
+	async create(input: HttpSidecarCreateInput): Promise<HttpSidecar> {
+		const body: Record<string, unknown> = { command: [...input.command] };
+		if (input.env !== undefined) body.env = { ...input.env };
+		if (input.cwd !== undefined) body.cwd = input.cwd;
+		if (input.inboundPortForward !== undefined) {
+			body.inboundPortForward = {
+				hostPort: input.inboundPortForward.hostPort,
+				sandboxPort: input.inboundPortForward.sandboxPort,
+			};
+		}
+		if (input.readinessPath !== undefined) body.readinessPath = input.readinessPath;
+		const row = await this.transport.request<unknown>({
+			method: "POST",
+			path: `/burrows/${encodeURIComponent(input.burrowId)}/sidecars`,
+			jsonBody: body,
+		});
+		return reviveSidecar(row);
+	}
+
+	async list(burrowId: string): Promise<HttpSidecar[]> {
+		const rows = await this.transport.request<unknown[]>({
+			method: "GET",
+			path: `/burrows/${encodeURIComponent(burrowId)}/sidecars`,
+		});
+		return rows.map(reviveSidecar);
+	}
+
+	async get(burrowId: string, sidecarId: string): Promise<HttpSidecar> {
+		const row = await this.transport.request<unknown>({
+			method: "GET",
+			path: `/burrows/${encodeURIComponent(burrowId)}/sidecars/${encodeURIComponent(sidecarId)}`,
+		});
+		return reviveSidecar(row);
+	}
+
+	async logs(
+		burrowId: string,
+		sidecarId: string,
+		opts: HttpSidecarLogsOptions = {},
+	): Promise<HttpSidecarLogs> {
+		const query = new URLSearchParams();
+		if (opts.tailBytes !== undefined) query.set("tail_bytes", String(opts.tailBytes));
+		return this.transport.request<HttpSidecarLogs>({
+			method: "GET",
+			path: `/burrows/${encodeURIComponent(burrowId)}/sidecars/${encodeURIComponent(sidecarId)}/logs`,
+			query,
+		});
+	}
+
+	async delete(burrowId: string, sidecarId: string): Promise<void> {
+		await this.transport.request<undefined>({
+			method: "DELETE",
+			path: `/burrows/${encodeURIComponent(burrowId)}/sidecars/${encodeURIComponent(sidecarId)}`,
+		});
+	}
+}
+
+function reviveSidecar(raw: unknown): HttpSidecar {
+	const row = raw as Record<string, unknown>;
+	return {
+		id: row.id as string,
+		burrowId: row.burrowId as string,
+		command: Array.isArray(row.command) ? [...(row.command as string[])] : [],
+		state: row.state as HttpSidecarState,
+		startedAt: toDate(row.startedAt),
+		exitCode: (row.exitCode as number | null) ?? null,
+		message: (row.message as string | null) ?? null,
+		pid: (row.pid as number | null) ?? null,
+		hostPortBound: row.hostPortBound === true,
+		inboundPortForward: (row.inboundPortForward as HttpInboundPortForward | null) ?? null,
+	};
+}
+
+/**
  * Public top-level HTTP client (SPEC §15 mirror, plan pl-5b40 step 6).
  *
  * Construction is sync — there's no DB to migrate or socket to bind, just
@@ -674,6 +801,7 @@ export class HttpClient {
 	readonly events: HttpEventsClient;
 	readonly agents: HttpAgentsClient;
 	readonly files: HttpFilesClient;
+	readonly sidecars: HttpSidecarsClient;
 
 	private readonly transport: HttpTransportClient;
 
@@ -685,6 +813,7 @@ export class HttpClient {
 		this.events = new HttpEventsClient(this.transport);
 		this.agents = new HttpAgentsClient(this.transport);
 		this.files = new HttpFilesClient(this.transport);
+		this.sidecars = new HttpSidecarsClient(this.transport);
 	}
 
 	/** Mirrors `Client.open` so factory call sites can swap one for the other. */
