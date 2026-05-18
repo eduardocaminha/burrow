@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-05-18
+
+Closes the `body.env` gap on `POST /burrows` so external orchestrators
+can thread per-burrow env vars through the HTTP edge — unblocking
+warren's Plot dispatch path (`warren-a346`, acceptance scenario 25's
+`PLOT_ID`-in-sandbox + workspace `plot.*` mirror assertions, previously
+soft-skipped pending this fix). The downstream `BurrowUpInput.envOverrides`
+plumbing was already in place; this release wires the handler edge to it.
+(plan `pl-96ca`, parent `burrow-59cd`)
+
+### Fixed
+
+- **`fix(server)`** — `POST /burrows` now parses `body.env` via the
+  existing `parseEnvMap` helper and threads it through to
+  `BurrowUpInput.envOverrides`, mirroring the conditional-assign pattern
+  used by sibling optional fields. Non-object / non-string-value shapes
+  reject with the same validation envelope as other env-map routes; the
+  no-`env` case is byte-identical to prior behavior. (`burrow-be5b`,
+  `burrow-59cd`)
+
+### Added
+
+- **`test(server)`** — HTTP integration coverage for the `body.env`
+  round-trip (positive: `printenv FOO` inside the sandbox returns the
+  injected value; negative: non-object `env` returns a 4xx with the
+  shared validation envelope). (`burrow-5322`)
+- **`docs(server)`** — OpenAPI golden now documents `body.env` on
+  `POST /burrows`. (`burrow-566e`)
+
 ## [0.3.1] - 2026-05-14
 
 Ships R-08 — the sandbox-side substrate for warren's per-run preview
