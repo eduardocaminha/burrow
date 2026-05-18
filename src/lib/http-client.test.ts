@@ -48,6 +48,11 @@ function makeMockAgent(id: string, opts: { spawnPerTurn?: boolean } = {}): Agent
 	return runtime;
 }
 
+function tcpBaseUrl(handle: ServeHandle): string {
+	if (handle.transport.kind !== "tcp") throw new Error("expected tcp transport");
+	return `http://${handle.transport.hostname}:${handle.transport.port}`;
+}
+
 function seedBurrow(client: Client, branch = "main") {
 	return client.repos.burrows.create({
 		kind: "project",
@@ -235,6 +240,118 @@ describe("HttpClient (TCP transport)", () => {
 		).rejects.toBeInstanceOf(ValidationError);
 		// Rollback: no active burrow leaks past the failed seed write.
 		expect(client.burrows.list({ state: "active" }).length).toBe(before);
+		rmSync(projectRoot, { recursive: true, force: true });
+	});
+
+	/* ------------------------------------------------------------------- */
+	/* body.env round-trip (burrow-5322 / pl-96ca step 2)                  */
+	/* ------------------------------------------------------------------- */
+	/* HttpBurrowsClient.up doesn't expose `env` yet, so these tests POST */
+	/* raw bodies to /burrows to lock the route-handler contract added in */
+	/* burrow-be5b: body.env → parseEnvMap → input.envOverrides →         */
+	/* resolveEnv → SandboxProfile.setEnv.                                */
+
+	test("POST /burrows threads body.env into the resolved SandboxProfile.setEnv", async () => {
+		const projectRoot = mkTmp("burrow-httpclient-proj-");
+		client.burrows.setUpOverrides({
+			skipDoctor: true,
+			materializer: async (opts) => ({
+				workspacePath: opts.workspacePath,
+				source: { kind: "worktree", branch: opts.branch, hostClonePath: "/host" },
+				identity: null,
+			}),
+		});
+		const baseUrl = tcpBaseUrl(handle);
+		const res = await fetch(`${baseUrl}/burrows`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ projectRoot, env: { FOO: "bar", PLOT_ID: "p-1" } }),
+		});
+		expect(res.status).toBe(201);
+		const created = (await res.json()) as { id: string };
+		const persisted = client.burrows.get(created.id);
+		// resolveEnv flattens overrides into the SandboxProfile.setEnv map
+		// the runner hands to the sandbox provider — that's the contract
+		// warren-a346 needs for PLOT_ID/PLOT_ACTOR to land in the sandbox.
+		const setEnv = (persisted.profileJson as { setEnv?: Record<string, string> }).setEnv;
+		expect(setEnv?.FOO).toBe("bar");
+		expect(setEnv?.PLOT_ID).toBe("p-1");
+		rmSync(projectRoot, { recursive: true, force: true });
+	});
+
+	test("POST /burrows without body.env leaves setEnv free of caller-injected keys", async () => {
+		const projectRoot = mkTmp("burrow-httpclient-proj-");
+		client.burrows.setUpOverrides({
+			skipDoctor: true,
+			materializer: async (opts) => ({
+				workspacePath: opts.workspacePath,
+				source: { kind: "worktree", branch: opts.branch, hostClonePath: "/host" },
+				identity: null,
+			}),
+		});
+		const baseUrl = tcpBaseUrl(handle);
+		const res = await fetch(`${baseUrl}/burrows`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ projectRoot }),
+		});
+		expect(res.status).toBe(201);
+		const created = (await res.json()) as { id: string };
+		const persisted = client.burrows.get(created.id);
+		const setEnv = (persisted.profileJson as { setEnv?: Record<string, string> }).setEnv ?? {};
+		// Acceptance #3: missing body.env is byte-identical to today — no
+		// FOO leaks in from a stale envOverrides assignment.
+		expect(setEnv.FOO).toBeUndefined();
+		expect(setEnv.PLOT_ID).toBeUndefined();
+		rmSync(projectRoot, { recursive: true, force: true });
+	});
+
+	test("POST /burrows rejects body.env shaped as an array with the parseEnvMap validation envelope", async () => {
+		const projectRoot = mkTmp("burrow-httpclient-proj-");
+		client.burrows.setUpOverrides({
+			skipDoctor: true,
+			materializer: async (opts) => ({
+				workspacePath: opts.workspacePath,
+				source: { kind: "worktree", branch: opts.branch, hostClonePath: "/host" },
+				identity: null,
+			}),
+		});
+		const baseUrl = tcpBaseUrl(handle);
+		const before = client.burrows.list({ state: "active" }).length;
+		const res = await fetch(`${baseUrl}/burrows`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ projectRoot, env: ["FOO=bar"] }),
+		});
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: { code: string; message: string } };
+		expect(body.error.code).toBe("validation_error");
+		expect(body.error.message).toBe("field 'env' must be a JSON object of string→string");
+		// Validation fires before client.burrows.up() — no half-provisioned row.
+		expect(client.burrows.list({ state: "active" }).length).toBe(before);
+		rmSync(projectRoot, { recursive: true, force: true });
+	});
+
+	test("POST /burrows rejects body.env with a non-string value", async () => {
+		const projectRoot = mkTmp("burrow-httpclient-proj-");
+		client.burrows.setUpOverrides({
+			skipDoctor: true,
+			materializer: async (opts) => ({
+				workspacePath: opts.workspacePath,
+				source: { kind: "worktree", branch: opts.branch, hostClonePath: "/host" },
+				identity: null,
+			}),
+		});
+		const baseUrl = tcpBaseUrl(handle);
+		const res = await fetch(`${baseUrl}/burrows`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ projectRoot, env: { COUNT: 42 } }),
+		});
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: { code: string; message: string } };
+		expect(body.error.code).toBe("validation_error");
+		expect(body.error.message).toBe("field 'env.COUNT' must be a string");
 		rmSync(projectRoot, { recursive: true, force: true });
 	});
 
