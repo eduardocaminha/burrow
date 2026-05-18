@@ -354,6 +354,12 @@ export const CreateBurrowBodySchema = component(
 			.describe(
 				"Built-in runtime ids to enable as `[[agents]]` patch rows. Forwarded by orchestrators (e.g. warren) so the sandbox profile mounts the runtime's binary even when the project clone has no `burrow.toml`.",
 			),
+		env: z
+			.record(z.string(), z.string())
+			.optional()
+			.describe(
+				"Per-burrow env overrides merged on top of the resolved sandbox profile env (the same path as `client.burrows.up({ envOverrides })`). Used by orchestrators (e.g. warren) to thread coordination vars like `PLOT_ID` / `PLOT_ACTOR` into the in-sandbox agent at create time. Must be a JSON object with string values; non-object shapes or non-string values return 400 `validation_error`.",
+			),
 		seed: WriteFilesBodySchema.optional().describe(
 			"Optional workspace seed payload. Files are written into the new workspace before the burrow is returned, atomic with provisioning — single round-trip for orchestrators (e.g. warren) that need to drop `.canopy/`, `.mulch/`, `.seeds/` inputs before the agent starts. Same path-validation rules as `POST /burrows/{id}/files`.",
 		),

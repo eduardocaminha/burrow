@@ -366,6 +366,16 @@
               "minLength": 1
             }
           },
+          "env": {
+            "description": "Per-burrow env overrides merged on top of the resolved sandbox profile env (the same path as `client.burrows.up({ envOverrides })`). Used by orchestrators (e.g. warren) to thread coordination vars like `PLOT_ID` / `PLOT_ACTOR` into the in-sandbox agent at create time. Must be a JSON object with string values; non-object shapes or non-string values return 400 `validation_error`.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
           "seed": {
             "description": "Optional workspace seed payload. Files are written into the new workspace before the burrow is returned, atomic with provisioning — single round-trip for orchestrators (e.g. warren) that need to drop `.canopy/`, `.mulch/`, `.seeds/` inputs before the agent starts. Same path-validation rules as `POST /burrows/{id}/files`.",
             "$ref": "#/components/schemas/WriteFilesBody"
