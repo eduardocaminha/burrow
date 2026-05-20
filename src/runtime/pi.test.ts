@@ -432,7 +432,6 @@ describe("piRuntime.envPassthrough (burrow-6f3f)", () => {
 		// Single-key delta — other providers' keys MUST NOT leak when the
 		// run only selected openai.
 		expect(names).not.toContain("GEMINI_API_KEY");
-		expect(names).not.toContain("GOOGLE_API_KEY");
 		expect(names).not.toContain("GROQ_API_KEY");
 		expect(names).not.toContain("MISTRAL_API_KEY");
 		expect(names).not.toContain("DEEPSEEK_API_KEY");
@@ -441,8 +440,9 @@ describe("piRuntime.envPassthrough (burrow-6f3f)", () => {
 	test("each non-anthropic provider opts in only its matching key", () => {
 		const cases: Array<[string, string]> = [
 			["openai", "OPENAI_API_KEY"],
-			["gemini", "GEMINI_API_KEY"],
-			["google", "GOOGLE_API_KEY"],
+			// pi's "google" provider reads GEMINI_API_KEY (per pi-ai
+			// env-api-keys.js); there is no "gemini" provider name.
+			["google", "GEMINI_API_KEY"],
 			["groq", "GROQ_API_KEY"],
 			["mistral", "MISTRAL_API_KEY"],
 			["deepseek", "DEEPSEEK_API_KEY"],
@@ -472,15 +472,22 @@ describe("piRuntime.envPassthrough (burrow-6f3f)", () => {
 
 	test("PI_PROVIDER_ENV_KEYS exposes the canonical key per provider name", () => {
 		// Map is the contract surface for warren-fe96's multi-provider
-		// passthrough wiring. Frozen against accidental edits.
+		// passthrough wiring. Frozen against accidental edits. Provider
+		// names match pi's --provider vocabulary exactly; each value is the
+		// env var pi-ai's env-api-keys.js looks up for that provider.
 		expect(PI_PROVIDER_ENV_KEYS).toEqual({
 			openai: ["OPENAI_API_KEY"],
-			gemini: ["GEMINI_API_KEY"],
-			google: ["GOOGLE_API_KEY"],
+			google: ["GEMINI_API_KEY"],
 			groq: ["GROQ_API_KEY"],
 			mistral: ["MISTRAL_API_KEY"],
 			deepseek: ["DEEPSEEK_API_KEY"],
 		});
+	});
+
+	test("provider=gemini → base only (pi has no 'gemini' provider; unknown contributes nothing)", () => {
+		expect(piEnvPassthrough({ frontmatter: { provider: "gemini" } })).toEqual([
+			...PI_ENV_PASSTHROUGH,
+		]);
 	});
 });
 

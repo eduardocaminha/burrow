@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-05-20
+
+Fixes the `PI_PROVIDER_ENV_KEYS` mapping so warren's multi-provider
+dispatch path actually authenticates against Gemini. The 0.3.3 map
+encoded `google → GOOGLE_API_KEY` and exposed a `gemini` alias, but
+pi's CLI rejects `--provider gemini` with `Error: Unknown provider`,
+and pi-ai's `env-api-keys.js` reads `GEMINI_API_KEY` (not
+`GOOGLE_API_KEY`) for the `google` provider. The fix realigns the map
+with pi's actual contract: `google → GEMINI_API_KEY`, and the dead
+`gemini` entry is dropped. Existing `openai`, `groq`, `mistral`,
+`deepseek` entries are unchanged.
+
+### Fixed
+
+- **`fix(runtime)`** — `PI_PROVIDER_ENV_KEYS.google` now forwards
+  `GEMINI_API_KEY` (matching `pi-ai/dist/env-api-keys.js:99`); the
+  `gemini` entry is removed since pi has no such provider name. Warren
+  callers that previously dispatched with `providerOverride='google'`
+  + `GEMINI_API_KEY` on the host now have a working end-to-end path.
+  Callers that dispatched `providerOverride='gemini'` were always
+  broken at pi spawn — they now fall through to the unknown-provider
+  branch (anthropic base only), letting projects opt the key in
+  explicitly via `burrow.toml [env]` if they really want the alias.
+
 ## [0.3.3] - 2026-05-18
 
 Widens `AgentRuntime.envPassthrough` to a function form so the `pi`

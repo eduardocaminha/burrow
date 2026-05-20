@@ -177,17 +177,18 @@ export const PI_ENV_PASSTHROUGH: readonly string[] = [
  * map is the missing env half so the sandboxed pi can authenticate against
  * the chosen provider.
  *
- * One key per provider name. A project that needs an alternate key flavor
- * (e.g. `GOOGLE_API_KEY` for gemini, or a per-provider base URL) still
- * declares it in `burrow.toml [env]` passthrough — this map only encodes
- * the canonical key for each pi `--provider` value. Provider names are
- * matched case-insensitively to match warren's lowercase normalization on
- * the schema side (warren `src/registry/schema.ts:93`).
+ * Provider names match pi's `--provider <name>` vocabulary exactly (pi
+ * rejects unknown names with `Error: Unknown provider "<name>"`), and each
+ * value is the env var pi-ai's `env-api-keys.js` looks up for that provider.
+ * Gemini is reached via `provider: "google"` — pi has no "gemini" provider
+ * name, and pi-ai reads `GEMINI_API_KEY` (not `GOOGLE_API_KEY`) for the
+ * google provider. Provider names are matched case-insensitively to match
+ * warren's lowercase normalization on the schema side (warren
+ * `src/registry/schema.ts:93`).
  */
 export const PI_PROVIDER_ENV_KEYS: Readonly<Record<string, readonly string[]>> = {
 	openai: ["OPENAI_API_KEY"],
-	gemini: ["GEMINI_API_KEY"],
-	google: ["GOOGLE_API_KEY"],
+	google: ["GEMINI_API_KEY"],
 	groq: ["GROQ_API_KEY"],
 	mistral: ["MISTRAL_API_KEY"],
 	deepseek: ["DEEPSEEK_API_KEY"],
