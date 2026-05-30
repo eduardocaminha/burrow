@@ -162,8 +162,8 @@ function parseEnum<T extends string>(
 function parseLimit(raw: string | null): number | undefined {
 	if (raw === null) return undefined;
 	const n = Number.parseInt(raw, 10);
-	if (!Number.isFinite(n) || n < 1) {
-		throw new ValidationError(`limit must be a positive integer; got '${raw}'`);
+	if (!Number.isFinite(n) || n < 1 || String(n) !== raw) {
+		throw new ValidationError(`limit expects a positive integer, got '${raw}'`);
 	}
 	return n;
 }
@@ -172,7 +172,7 @@ function parsePositiveInt(raw: string | null, label: string): number | undefined
 	if (raw === null) return undefined;
 	const n = Number.parseInt(raw, 10);
 	if (!Number.isFinite(n) || n < 1 || String(n) !== raw) {
-		throw new ValidationError(`${label} must be a positive integer; got '${raw}'`);
+		throw new ValidationError(`${label} expects a positive integer, got '${raw}'`);
 	}
 	return n;
 }
@@ -181,30 +181,24 @@ function parseNonNegativeInt(raw: string | null, label: string): number | undefi
 	if (raw === null) return undefined;
 	const n = Number.parseInt(raw, 10);
 	if (!Number.isFinite(n) || n < 0 || String(n) !== raw) {
-		throw new ValidationError(`${label} must be a non-negative integer; got '${raw}'`);
+		throw new ValidationError(`${label} expects a non-negative integer, got '${raw}'`);
 	}
 	return n;
 }
 
 /**
- * Streaming routes accept their boolean toggle as 'true'/'false' OR '1'/'0'
- * so curl users can write `?follow=1` / `?once=1` (CLI muscle memory)
- * without surprises. Used by `?follow=` on /events and /runs/:id/stream and
- * by `?once=` / `?follow=` on /watch — every streaming endpoint takes the
- * same input grammar.
+ * Shared boolean query-param grammar for HTTP routes: accepts
+ * 'true'/'false' OR '1'/'0' so curl users can write `?follow=1`,
+ * `?once=1`, `?archive=0` (CLI muscle memory) without surprises.
+ * Used by `?follow=` on /events and /runs/:id/stream, by `?once=`/
+ * `?follow=` on /watch, and by `?archive=` on DELETE /burrows/:id —
+ * every boolean query param takes the same input grammar.
  */
 function parseStreamBool(raw: string | null, label: string): boolean | undefined {
 	if (raw === null) return undefined;
 	if (raw === "true" || raw === "1") return true;
 	if (raw === "false" || raw === "0") return false;
 	throw new ValidationError(`${label} must be 'true'/'1' or 'false'/'0'; got '${raw}'`);
-}
-
-function parseBoolean(raw: string | null, label: string): boolean | undefined {
-	if (raw === null) return undefined;
-	if (raw === "true") return true;
-	if (raw === "false") return false;
-	throw new ValidationError(`${label} must be 'true' or 'false'; got '${raw}'`);
 }
 
 /**
@@ -310,7 +304,7 @@ function destroyBurrow(client: Client, deps: HandlerDeps): RouteHandler {
 	return async (ctx) => {
 		const id = requireParam(ctx, "id");
 		const opts: { archive?: boolean } = {};
-		const archive = parseBoolean(ctx.url.searchParams.get("archive"), "archive");
+		const archive = parseStreamBool(ctx.url.searchParams.get("archive"), "archive");
 		if (archive !== undefined) opts.archive = archive;
 		// Cascade: terminate every live sidecar + release every forward
 		// before the burrow row is marked destroyed (SPEC §8.7 cleanup

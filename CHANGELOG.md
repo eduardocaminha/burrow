@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-05-30
+
+Nightwatch patrol release: two surgical correctness/hygiene fixes from
+plan `pl-26a9`. No behavior changes for happy-path callers.
+
+### Fixed
+
+- **`fix(runtime/parsers)`** — `parsePiEvents` now rejects top-level
+  JSON arrays the same way `stream-json` and `jsonl-claude` do, so a
+  bare `[...]` line degrades to a text event instead of being cast
+  through as a `PiEnvelope`. (burrow-6e30, #23)
+- **`fix(server)`** — `parseLimit` / `parsePositiveInt` /
+  `parseNonNegativeInt` now emit the same
+  `<label> expects a <kind> integer, got <raw>` error shape the CLI
+  parsers already use, unifying validation wording across HTTP and
+  CLI surfaces. (burrow-3222, #24)
+
+## [0.3.7] - 2026-05-29
+
+Nightwatch patrol release: five small independent correctness/hygiene
+fixes from plan `pl-77d8`. No behavior changes for happy-path callers.
+
+### Fixed
+
+- **`fix(cli)`** — `burrow send --json` now emits 2-space-indented
+  JSON, matching every other `--json` output in the CLI.
+  (burrow-2444, #15)
+- **`fix(server)`** — `parseLimit` now rejects query params with
+  trailing garbage (e.g. `?limit=10abc`) instead of silently coercing
+  via `parseInt`; callers get a `ValidationError` / HTTP 400.
+  (burrow-1243, #16)
+- **`fix(server)`** — `?archive=` on list endpoints now accepts the
+  same boolean grammar as the streaming endpoints (`1`/`0` alongside
+  `true`/`false`). OpenAPI spec + golden updated to match.
+  (burrow-8ce9, #17)
+- **`fix(runtime/parsers)`** — `jsonl-claude` and `stream-json` NDJSON
+  parsers now reject top-level JSON arrays on a line instead of
+  treating them as a valid event. (burrow-68c6, #19)
+
+### Changed
+
+- **`refactor(provider/local)`** — Extracted the duplicated
+  `workspaceSource` extractor shared by `cli/commands/fork` and
+  `lib/destroy` into `src/provider/local/workspace.ts`, with unit
+  tests pinning the behavior. (burrow-6732, #18)
+
+## [0.3.6] - 2026-05-28
+
+Nightwatch parity release: closes the `mx-d00e99` HTTP client / server
+env-forwarding gap surfaced in plan `pl-e0fb`.
+
+### Fixed
+
+- **`fix(http-client)`** — `HttpBurrowUpInput` now carries an optional
+  `env?: Record<string, string>`, and `HttpBurrowsClient.up` forwards
+  it as `body.env` (matching `HttpSidecarsClient.create`'s env shape).
+  The success-path env tests in `src/lib/http-client.test.ts` now
+  drive through the typed client instead of raw `fetch`, locking
+  client/server parity. (burrow-03cf, #11)
+
 ## [0.3.5] - 2026-05-27
 
 Nightwatch cleanup release: four small correctness/hygiene fixes from
