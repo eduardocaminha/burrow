@@ -52,6 +52,6 @@
   },
   "name": "claude-code-chat runtime",
   "schema_version": 1,
-  "status": "ready",
-  "updated_at": "2026-06-22T21:21:34.354Z"
+  "status": "done",
+  "updated_at": "2026-06-22T21:22:32.727Z"
 }
