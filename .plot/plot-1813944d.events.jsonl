@@ -4,3 +4,31 @@
 {"type":"intent_edited","actor":"user:operator","at":"2026-06-22T18:08:14.583Z","data":{"field":"constraints","value":["Implementa o plano pl-302c (ja aprovado, seed burrow-6a14).","O runtime precisa casar com o contrato HTTP que o burrow-client do warren consome."]}}
 {"type":"intent_edited","actor":"user:operator","at":"2026-06-22T18:08:14.583Z","data":{"field":"success_criteria","value":["Runtime claude-code-chat registrado e funcional no burrow.","Testes do pl-302c passando.","Burrow do fork instalavel pro warren consumir (git-install, pacote publicado, ou copia na imagem)."]}}
 {"type":"attachment_added","actor":"user:operator","at":"2026-06-22T18:08:14.663Z","data":{"id":"att-001","type":"seeds_issue","ref":"pl-302c","role":"plan"}}
+{"type":"plot_created","actor":"user:eduardo-caminha","at":"2026-06-22T18:08:14.524Z","data":{"name":"claude-code-chat runtime"}}
+{"type":"intent_edited","actor":"user:eduardo-caminha","at":"2026-06-22T18:08:14.583Z","data":{"field":"goal","value":"Construir o runtime conversacional claude-code-chat no burrow (spawn-per-turn + retomada via --resume), pra o select de runtime do warren ter um destino real."}}
+{"type":"intent_edited","actor":"user:eduardo-caminha","at":"2026-06-22T18:08:14.583Z","data":{"field":"non_goals","value":["Nao cobre a mudanca no warren de apontar a imagem pro burrow do fork; isso vive no Plot irmao no repo do warren."]}}
+{"type":"intent_edited","actor":"user:eduardo-caminha","at":"2026-06-22T18:08:14.583Z","data":{"field":"constraints","value":["Implementa o plano pl-302c (ja aprovado, seed burrow-6a14).","O runtime precisa casar com o contrato HTTP que o burrow-client do warren consome."]}}
+{"type":"intent_edited","actor":"user:eduardo-caminha","at":"2026-06-22T18:08:14.583Z","data":{"field":"success_criteria","value":["Runtime claude-code-chat registrado e funcional no burrow.","Testes do pl-302c passando.","Burrow do fork instalavel pro warren consumir (git-install, pacote publicado, ou copia na imagem)."]}}
+{"type":"attachment_added","actor":"user:eduardo-caminha","at":"2026-06-22T18:08:14.663Z","data":{"id":"att-001","type":"seeds_issue","ref":"pl-302c","role":"plan"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T18:16:50.507Z","data":{"id":"att-002","type":"seeds_issue","ref":"burrow-87a6","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T18:16:50.518Z","data":{"id":"att-003","type":"seeds_issue","ref":"burrow-ae14","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T18:16:50.521Z","data":{"id":"att-004","type":"seeds_issue","ref":"burrow-fedb","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T18:18:03.513Z","data":{"id":"att-002","type":"seeds_issue","ref":"burrow-87a6","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T18:18:03.521Z","data":{"id":"att-003","type":"seeds_issue","ref":"burrow-ae14","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T18:18:03.525Z","data":{"id":"att-004","type":"seeds_issue","ref":"burrow-fedb","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T18:21:13.264Z","data":{"id":"att-002","type":"seeds_issue","ref":"burrow-87a6","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T18:21:13.272Z","data":{"id":"att-003","type":"seeds_issue","ref":"burrow-ae14","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T18:21:13.278Z","data":{"id":"att-004","type":"seeds_issue","ref":"burrow-fedb","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T19:21:39.594Z","data":{"id":"att-002","type":"seeds_issue","ref":"burrow-87a6","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T19:21:39.602Z","data":{"id":"att-003","type":"seeds_issue","ref":"burrow-ae14","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T19:21:39.608Z","data":{"id":"att-004","type":"seeds_issue","ref":"burrow-fedb","role":"tracks"}}
+{"type":"plan_run_dispatched","actor":"user:operator","at":"2026-06-22T19:23:15.165Z","data":{"plan_run_id":"plnr_vebker22hz54","plan_id":"pl-302c","children_count":3}}
+{"type":"run_dispatched","actor":"user:operator","at":"2026-06-22T19:23:17.272Z","data":{"run_id":"run_fve5we1mvfzj","agent":"claude-code","model":"claude-opus-4-8","project":"prj_3hfkjnmy7dgt"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T19:23:50.499Z","data":{"id":"att-002","type":"seeds_issue","ref":"burrow-87a6","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T19:23:50.506Z","data":{"id":"att-003","type":"seeds_issue","ref":"burrow-ae14","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T19:23:50.509Z","data":{"id":"att-004","type":"seeds_issue","ref":"burrow-fedb","role":"tracks"}}
+{"type":"plan_run_dispatched","actor":"user:operator","at":"2026-06-22T19:37:35.667Z","data":{"plan_run_id":"plnr_p520tvf1f0aw","plan_id":"pl-302c","children_count":3}}
+{"type":"run_dispatched","actor":"user:operator","at":"2026-06-22T19:37:39.886Z","data":{"run_id":"run_kjj5dft3b186","agent":"claude-code","model":"claude-opus-4-8","project":"prj_3hfkjnmy7dgt"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T19:38:17.332Z","data":{"id":"att-002","type":"seeds_issue","ref":"burrow-87a6","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T19:38:17.341Z","data":{"id":"att-003","type":"seeds_issue","ref":"burrow-ae14","role":"tracks"}}
+{"type":"attachment_added","actor":"user:operator","at":"2026-06-22T19:38:17.348Z","data":{"id":"att-004","type":"seeds_issue","ref":"burrow-fedb","role":"tracks"}}
