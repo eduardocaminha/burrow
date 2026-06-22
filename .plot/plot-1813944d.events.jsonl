@@ -35,3 +35,5 @@
 {"type":"run_dispatched","actor":"user:operator","at":"2026-06-22T19:45:30.822Z","data":{"run_id":"run_ah8gc65dhp9e","agent":"claude-code","model":"claude-opus-4-8","project":"prj_3hfkjnmy7dgt"}}
 {"type":"run_dispatched","actor":"user:operator","at":"2026-06-22T19:56:20.677Z","data":{"run_id":"run_nv999vf3tqrj","agent":"claude-code","model":"claude-opus-4-8","project":"prj_3hfkjnmy7dgt"}}
 {"type":"status_changed","actor":"user:operator","at":"2026-06-22T21:21:34.354Z","data":{"from":"drafting","to":"ready"}}
+{"type":"status_changed","actor":"user:operator","at":"2026-06-22T21:22:29.474Z","data":{"from":"ready","to":"active"}}
+{"type":"status_changed","actor":"user:operator","at":"2026-06-22T21:22:32.727Z","data":{"from":"active","to":"done"}}
