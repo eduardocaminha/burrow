@@ -56,9 +56,7 @@ describe("createJsonlClaudeChatParser", () => {
 
 	test("result without preceding system/init emits agent_end with undefined session_id", () => {
 		const parse = createJsonlClaudeChatParser();
-		const events = parse(
-			JSON.stringify({ type: "result", subtype: "success", is_error: false }),
-		);
+		const events = parse(JSON.stringify({ type: "result", subtype: "success", is_error: false }));
 		expect(events).toHaveLength(1);
 		expect(events[0]?.kind).toBe("agent_end");
 		// session_id is undefined / not in payload when never captured
@@ -173,6 +171,67 @@ describe("createJsonlClaudeChatParser", () => {
 		);
 		expect(resultEvents[0]?.kind).toBe("agent_end");
 		expect((resultEvents[0]?.payload as Record<string, unknown>).session_id).toBe("turn-1-id");
+	});
+
+	test("usage field from result envelope is preserved in agent_end payload", () => {
+		const parse = createJsonlClaudeChatParser();
+		parse(JSON.stringify({ type: "system", subtype: "init", session_id: "sess-u" }));
+		const events = parse(
+			JSON.stringify({
+				type: "result",
+				subtype: "success",
+				is_error: false,
+				result: "done",
+				usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 0 },
+			}),
+		);
+		expect(events).toHaveLength(1);
+		expect(events[0]?.kind).toBe("agent_end");
+		const payload = events[0]?.payload as Record<string, unknown>;
+		expect(payload.usage).toMatchObject({ input_tokens: 100, output_tokens: 50 });
+		expect(payload.session_id).toBe("sess-u");
+	});
+
+	test("full turn contract: system/init → text → result emits state_change + text + agent_end (never state_change for result)", () => {
+		const parse = createJsonlClaudeChatParser();
+
+		const sysEvents = parse(
+			JSON.stringify({ type: "system", subtype: "init", session_id: "contract-sess" }),
+		);
+		expect(sysEvents).toHaveLength(1);
+		expect(sysEvents[0]?.kind).toBe("state_change");
+
+		const textEvents = parse(
+			JSON.stringify({
+				type: "assistant",
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "text", text: "Here is the fix." },
+						{ type: "tool_use", id: "tu1", name: "Bash", input: { command: "bun test" } },
+					],
+				},
+			}),
+		);
+		expect(textEvents.map((e) => e.kind)).toEqual(["text", "tool_use"]);
+		expect((textEvents[0]?.payload as Record<string, unknown>).text).toBe("Here is the fix.");
+
+		const resultEvents = parse(
+			JSON.stringify({
+				type: "result",
+				subtype: "success",
+				is_error: false,
+				result: "Here is the fix.",
+				usage: { input_tokens: 200, output_tokens: 30 },
+			}),
+		);
+		expect(resultEvents).toHaveLength(1);
+		// MUST be agent_end (turn boundary), NOT state_change (session terminal)
+		expect(resultEvents[0]?.kind).toBe("agent_end");
+		expect(resultEvents[0]?.kind).not.toBe("state_change");
+		const payload = resultEvents[0]?.payload as Record<string, unknown>;
+		expect(payload.session_id).toBe("contract-sess");
+		expect(payload.usage).toMatchObject({ input_tokens: 200, output_tokens: 30 });
 	});
 
 	test("unknown envelope types fall through to text events", () => {

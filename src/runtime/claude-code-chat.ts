@@ -163,9 +163,7 @@ export const claudeCodeChatRuntime: AgentRuntime = {
 	 * (e.g. the turn exited 0 but claude produced no result line), in which
 	 * case the next resume falls back to a fresh spawn.
 	 */
-	async extractMetadata(
-		ctx: ExtractMetadataContext,
-	): Promise<Record<string, unknown> | undefined> {
+	async extractMetadata(ctx: ExtractMetadataContext): Promise<Record<string, unknown> | undefined> {
 		const sessionId = perRunSessionIds.get(ctx.run.id);
 		perRunParsers.delete(ctx.run.id);
 		perRunSessionIds.delete(ctx.run.id);
