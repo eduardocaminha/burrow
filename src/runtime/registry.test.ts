@@ -6,6 +6,7 @@ describe("AgentRegistry", () => {
 	test("seeds with the built-in runtimes by default", () => {
 		const reg = new AgentRegistry();
 		expect(reg.has("claude-code")).toBe(true);
+		expect(reg.has("claude-code-chat")).toBe(true);
 		expect(reg.has("sapling")).toBe(true);
 		expect(reg.has("codex")).toBe(true);
 		expect(reg.has("pi")).toBe(true);

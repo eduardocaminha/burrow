@@ -783,6 +783,7 @@ export interface SpawnContext {
 ### 12.2 Built-in runtimes
 
 - **`claude-code`** — Spawn-per-turn. Uses `claude --output-format stream-json --input-format stream-json`. Steering messages delivered as user turns over stdin between agent turns. Deploys a `.claude/settings.local.json` with PreToolUse guards via `prepareWorkspace`.
+- **`claude-code-chat`** — Spawn-per-turn, conversational. Same credential forwarding and `prepareWorkspace` as `claude-code` but drives a multi-turn loop via `-p <prompt> --output-format stream-json --verbose --dangerously-skip-permissions` (non-bare to preserve OAuth). Turn 1 spawns fresh; turns 2..N append `--resume <session_id>` so the CLI reuses the same conversation thread without replaying history. `result` envelopes are remapped to `agent_end` (turn boundary, not session terminal); `session_id` is captured from `system/init` and propagated into the `agent_end` payload, then stored in `Run.metadataJson.session_id` by `extractMetadata` so `buildResumeCommand` can pass it on the next spawn. Steering messages are folded into the `-p` prompt text. `supportsResume = true`. If the process exits without emitting a `result` line, `extractMetadata` returns `undefined` and the next spawn starts fresh (no `--resume`).
 - **`sapling`** — Spawn-per-turn. Native NDJSON event stream. Reuses the harness already used by overstory/mycelium.
 - **`codex`** — One-shot. `codex exec --prompt-file ...`. `supportsResume = false`. Steering messages defer to the next *run*.
 - **`pi`** — Spawn-per-turn. `pi --mode rpc --session-dir .pi/sessions --no-extensions --offline --provider anthropic --model <pinned>` (pinned to a Claude model that matches the parser's golden RPC fixtures). `--offline` suppresses pi's startup network operations (telemetry / update checks) that otherwise block the RPC read loop for 2+ minutes inside bwrap before the first event lands (burrow-029d). One `{"type":"prompt","message":"<prompt + steering prefix>"}` line on stdin per run; events stream on stdout. `supportsResume = true`: `prepareWorkspace` creates the per-burrow session dir, `extractMetadata` reads the resulting `<ts>_<uuid>.jsonl` header to persist `Run.metadataJson.session_id`, and `buildResumeCommand` passes `--session <id>` so the next run continues the same conversation. Wider RPC vocabulary is collapsed into the SPEC §14.1 taxonomy (see §14.1 footnote).
@@ -917,6 +918,16 @@ The envelope is **stable**. Adding a new `kind` is additive; consumers ignore un
 > `state_change`. Promoting any of these (e.g. `compaction` to a
 > first-class kind) is non-breaking because the envelope is already in
 > `payload` — matching the additive-only posture above.
+>
+> The `claude-code-chat` runtime (`src/runtime/parsers/jsonl-claude-chat.ts`)
+> applies one deliberate remap: `result` envelopes → `agent_end` (turn
+> boundary) rather than `state_change` (as in the batch `claude-code`
+> parser). This is the key difference between the two parsers: the chat
+> parser signals end-of-turn to the conversational consumer (`warren`
+> `mode:conversation`) without indicating session termination.
+> The `usage` field and `session_id` from the envelope are preserved in the
+> `agent_end` payload so consumers can access token counts and the runtime
+> can thread `--resume <session_id>` on the next spawn.
 
 ### 14.2 CLI
 
@@ -1291,7 +1302,7 @@ Drizzle schema, migrations, repos. `events` / `runs` / `messages` / `burrows` ta
 `git worktree` for project burrows, `git clone` fallback, `burrow fork` for task burrows.
 
 ### Phase 4 — Agent runtimes (2-3 days)
-`AgentRuntime` interface. Built-ins: `claude-code` (spawn-per-turn, NDJSON, settings.local.json hooks), `sapling`, `codex`, `pi` (spawn-per-turn, JSON-RPC over stdin/stdout). Declarative `AgentConfig` adapter for the long tail.
+`AgentRuntime` interface. Built-ins: `claude-code` (spawn-per-turn, NDJSON, settings.local.json hooks), `claude-code-chat` (conversational spawn-per-turn via `--resume`), `sapling`, `codex`, `pi` (spawn-per-turn, JSON-RPC over stdin/stdout), `pi-chat` (pi with extensions enabled). Declarative `AgentConfig` adapter for the long tail.
 
 ### Phase 5 — Inbox + steering (1 day)
 `messages` table, `burrow send`, `burrow chat`, inbox-injection on next turn for spawn-per-turn runtimes.

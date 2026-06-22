@@ -3,10 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BurrowRow, MessageRow, RunRow } from "../db/schema.ts";
-import {
-	CLAUDE_CODE_ENV_PASSTHROUGH,
-	claudeCodeBurrowTmpdir,
-} from "./claude-code.ts";
+import { CLAUDE_CODE_ENV_PASSTHROUGH, claudeCodeBurrowTmpdir } from "./claude-code.ts";
 import { buildChatPrompt, claudeCodeChatRuntime } from "./claude-code-chat.ts";
 
 function fakeBurrow(): BurrowRow {
@@ -361,10 +358,10 @@ describe("claudeCodeChatRuntime.parseEvents / extractMetadata", () => {
 			JSON.stringify({ type: "system", subtype: "init", session_id: "sess-run1" }),
 			{ burrow: fakeBurrow(), run: fakeRun({ id: run1Id }) },
 		);
-		claudeCodeChatRuntime.parseEvents(
-			JSON.stringify({ type: "result", subtype: "success" }),
-			{ burrow: fakeBurrow(), run: fakeRun({ id: run1Id }) },
-		);
+		claudeCodeChatRuntime.parseEvents(JSON.stringify({ type: "result", subtype: "success" }), {
+			burrow: fakeBurrow(),
+			run: fakeRun({ id: run1Id }),
+		});
 
 		// Run 2 never gets a result — should have no session_id
 		const meta2 = await claudeCodeChatRuntime.extractMetadata?.({
@@ -381,6 +378,149 @@ describe("claudeCodeChatRuntime.parseEvents / extractMetadata", () => {
 			workspacePath: "/ws",
 		});
 		expect(meta1).toEqual({ session_id: "sess-run1" });
+	});
+});
+
+// ---------------------------------------------------------------------------
+// warren mode:conversation contract tests
+// ---------------------------------------------------------------------------
+
+describe("claude-code-chat warren contract", () => {
+	test("full turn emits text/stdout per block, agent_end as turn boundary, never state_change for result", async () => {
+		const runId = "run_contract_1";
+		const ctx = { burrow: fakeBurrow(), run: fakeRun({ id: runId }) };
+
+		// system/init → state_change (not the turn boundary)
+		const sysEvents = claudeCodeChatRuntime.parseEvents(
+			JSON.stringify({ type: "system", subtype: "init", session_id: "contract-sid" }),
+			ctx,
+		);
+		expect(sysEvents[0]?.kind).toBe("state_change");
+
+		// assistant text block → text on stdout
+		const textEvents = claudeCodeChatRuntime.parseEvents(
+			JSON.stringify({
+				type: "assistant",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "All tests pass." }],
+				},
+			}),
+			ctx,
+		);
+		expect(textEvents[0]?.kind).toBe("text");
+		expect(textEvents[0]?.stream).toBe("stdout");
+
+		// result → agent_end (turn boundary), NEVER state_change (session terminal)
+		const endEvents = claudeCodeChatRuntime.parseEvents(
+			JSON.stringify({
+				type: "result",
+				subtype: "success",
+				is_error: false,
+				result: "All tests pass.",
+				usage: { input_tokens: 150, output_tokens: 20 },
+			}),
+			ctx,
+		);
+		expect(endEvents).toHaveLength(1);
+		expect(endEvents[0]?.kind).toBe("agent_end");
+		expect(endEvents[0]?.kind).not.toBe("state_change");
+
+		// agent_end payload carries session_id and usage for warren's mode:conversation
+		const payload = endEvents[0]?.payload as Record<string, unknown>;
+		expect(payload.session_id).toBe("contract-sid");
+		expect(payload.usage).toMatchObject({ input_tokens: 150, output_tokens: 20 });
+
+		// cleanup
+		await claudeCodeChatRuntime.extractMetadata?.({
+			burrow: fakeBurrow(),
+			run: fakeRun({ id: runId }),
+			workspacePath: "/ws",
+		});
+	});
+
+	test("multi-turn contract: session_id from turn 1 flows into --resume on turn 2", async () => {
+		const run1Id = "run_mt_1";
+		const ctx1 = { burrow: fakeBurrow(), run: fakeRun({ id: run1Id }) };
+
+		// Turn 1: parse events, capture session_id
+		claudeCodeChatRuntime.parseEvents(
+			JSON.stringify({ type: "system", subtype: "init", session_id: "mt-session" }),
+			ctx1,
+		);
+		claudeCodeChatRuntime.parseEvents(
+			JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+			ctx1,
+		);
+		const meta = await claudeCodeChatRuntime.extractMetadata?.({
+			burrow: fakeBurrow(),
+			run: fakeRun({ id: run1Id }),
+			workspacePath: "/ws",
+		});
+		expect(meta).toEqual({ session_id: "mt-session" });
+
+		// Turn 2: buildResumeCommand uses the captured session_id with --resume
+		const cmd = claudeCodeChatRuntime.buildResumeCommand?.({
+			burrow: fakeBurrow(),
+			run: fakeRun({ id: "run_mt_2" }),
+			priorRun: fakeRun({ id: run1Id, state: "succeeded", metadataJson: meta }),
+			prompt: "now write the tests",
+			pendingMessages: [],
+			envResolved: {},
+			workspacePath: "/ws",
+		});
+		expect(cmd?.argv).toContain("--resume");
+		const resumeIdx = cmd?.argv.indexOf("--resume") ?? -1;
+		expect(cmd?.argv[resumeIdx + 1]).toBe("mt-session");
+	});
+
+	test("fallback contract: no result → extractMetadata undefined → buildResumeCommand spawns fresh (no --resume)", async () => {
+		const runId = "run_fallback_1";
+		const ctx = { burrow: fakeBurrow(), run: fakeRun({ id: runId }) };
+
+		// Process some events but NO result line (simulates process exit without result)
+		claudeCodeChatRuntime.parseEvents(
+			JSON.stringify({ type: "system", subtype: "init", session_id: "fallback-sid" }),
+			ctx,
+		);
+		// No result event — process exited without emitting one
+
+		const meta = await claudeCodeChatRuntime.extractMetadata?.({
+			burrow: fakeBurrow(),
+			run: fakeRun({ id: runId }),
+			workspacePath: "/ws",
+		});
+		expect(meta).toBeUndefined();
+
+		// buildResumeCommand falls back to a fresh spawn (no --resume)
+		const cmd = claudeCodeChatRuntime.buildResumeCommand?.({
+			burrow: fakeBurrow(),
+			run: fakeRun({ id: "run_fallback_2" }),
+			priorRun: fakeRun({ id: runId, state: "failed", metadataJson: undefined }),
+			prompt: "retry",
+			pendingMessages: [],
+			envResolved: {},
+			workspacePath: "/ws",
+		});
+		expect(cmd?.argv).not.toContain("--resume");
+		expect(cmd?.argv).toContain("-p");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// built-in registry presence
+// ---------------------------------------------------------------------------
+
+describe("claudeCodeChatRuntime identity", () => {
+	test("registered as a built-in alongside claude-code", async () => {
+		const { BUILT_IN_RUNTIMES } = await import("./registry.ts");
+		const ids = BUILT_IN_RUNTIMES.map((r) => r.id);
+		expect(ids).toContain("claude-code-chat");
+		expect(ids).toContain("claude-code");
+	});
+
+	test("supportsResume is true (multi-turn via --resume)", () => {
+		expect(claudeCodeChatRuntime.supportsResume).toBe(true);
 	});
 });
 
