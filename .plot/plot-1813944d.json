@@ -1,0 +1,33 @@
+{
+  "attachments": [
+    {
+      "added_at": "2026-06-22T18:08:14.663Z",
+      "added_by": "user:eduardo-caminha",
+      "id": "att-001",
+      "ref": "pl-302c",
+      "role": "plan",
+      "type": "seeds_issue"
+    }
+  ],
+  "created_at": "2026-06-22T18:08:14.524Z",
+  "id": "plot-1813944d",
+  "intent": {
+    "constraints": [
+      "Implementa o plano pl-302c (ja aprovado, seed burrow-6a14).",
+      "O runtime precisa casar com o contrato HTTP que o burrow-client do warren consome."
+    ],
+    "goal": "Construir o runtime conversacional claude-code-chat no burrow (spawn-per-turn + retomada via --resume), pra o select de runtime do warren ter um destino real.",
+    "non_goals": [
+      "Nao cobre a mudanca no warren de apontar a imagem pro burrow do fork; isso vive no Plot irmao no repo do warren."
+    ],
+    "success_criteria": [
+      "Runtime claude-code-chat registrado e funcional no burrow.",
+      "Testes do pl-302c passando.",
+      "Burrow do fork instalavel pro warren consumir (git-install, pacote publicado, ou copia na imagem)."
+    ]
+  },
+  "name": "claude-code-chat runtime",
+  "schema_version": 1,
+  "status": "drafting",
+  "updated_at": "2026-06-22T18:08:14.663Z"
+}
