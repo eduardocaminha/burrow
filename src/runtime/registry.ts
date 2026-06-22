@@ -15,6 +15,7 @@
 import { NotFoundError, ValidationError } from "../core/errors.ts";
 import type { AgentConfig } from "../schemas/agent-config.ts";
 import { claudeCodeRuntime } from "./claude-code.ts";
+import { claudeCodeChatRuntime } from "./claude-code-chat.ts";
 import { codexRuntime } from "./codex.ts";
 import { loadAgentConfig } from "./declarative.ts";
 import { piRuntime } from "./pi.ts";
@@ -24,6 +25,7 @@ import { saplingRuntime } from "./sapling.ts";
 
 export const BUILT_IN_RUNTIMES: readonly AgentRuntime[] = [
 	claudeCodeRuntime,
+	claudeCodeChatRuntime,
 	saplingRuntime,
 	codexRuntime,
 	piRuntime,
