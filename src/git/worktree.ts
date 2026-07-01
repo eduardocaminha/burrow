@@ -64,8 +64,15 @@ export interface AddWorktreeOptions {
 export async function addWorktree(opts: AddWorktreeOptions): Promise<void> {
 	const args = ["worktree", "add"];
 	if (opts.createBranch) {
-		args.push("-b", opts.branch, opts.workspacePath);
-		if (opts.baseBranch) args.push(opts.baseBranch);
+		// When the branch already exists, check it out instead of re-creating it
+		// with -b — makes re-dispatch idempotent (os-eco-e0a7).
+		const exists = await branchExists(opts.hostClonePath, opts.branch);
+		if (exists) {
+			args.push(opts.workspacePath, opts.branch);
+		} else {
+			args.push("-b", opts.branch, opts.workspacePath);
+			if (opts.baseBranch) args.push(opts.baseBranch);
+		}
 	} else {
 		args.push(opts.workspacePath, opts.branch);
 	}
