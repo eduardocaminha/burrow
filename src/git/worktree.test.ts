@@ -96,6 +96,37 @@ describe("git worktree helpers", () => {
 		expect(await Bun.file(join(ws, "README.md")).exists()).toBe(false);
 	});
 
+	test("addWorktree with createBranch on an existing branch checks it out (idempotent)", async () => {
+		const ws = join(root, "ws-reuse");
+		// feature/wt was pre-created by bootstrapRepo — it already exists locally.
+		await addWorktree({
+			hostClonePath: repo,
+			workspacePath: ws,
+			branch: "feature/wt",
+			createBranch: true,
+			baseBranch: "main",
+		});
+		expect(await Bun.file(join(ws, "README.md")).exists()).toBe(true);
+		const list = await listWorktrees(repo);
+		const entry = list.find((e) => e.worktree.endsWith("/ws-reuse"));
+		expect(entry?.branch).toBe("refs/heads/feature/wt");
+	});
+
+	test("addWorktree with createBranch on a new branch still uses -b", async () => {
+		const ws = join(root, "ws-new");
+		await addWorktree({
+			hostClonePath: repo,
+			workspacePath: ws,
+			branch: "warren/run_newbranch",
+			createBranch: true,
+			baseBranch: "main",
+		});
+		expect(await branchExists(repo, "warren/run_newbranch")).toBe(true);
+		const list = await listWorktrees(repo);
+		const entry = list.find((e) => e.worktree.endsWith("/ws-new"));
+		expect(entry?.branch).toBe("refs/heads/warren/run_newbranch");
+	});
+
 	test("addWorktree against a missing branch surfaces a WorkspaceMaterializationError", async () => {
 		const ws = join(root, "ws-missing");
 		await expect(
